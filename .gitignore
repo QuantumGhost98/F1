@@ -1,0 +1,19 @@
+# python cache / artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# jupyter
+*.ipynb_checkpoints/
+
+# env files
+.env
+*.env
+
+# data
+data/
+*.png
+*.jpeg
+*.jpg
