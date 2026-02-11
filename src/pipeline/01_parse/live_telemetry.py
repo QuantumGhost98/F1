@@ -2,13 +2,14 @@
 """
 F1 Live Telemetry Capture & Analysis (Bahrain 2026)
 
-Uses FastF1's SignalR client to connect directly to livetiming.formula1.com
-and capture live timing data. This is the same data source used by the
-official F1 live timing page.
+Uses FastF1's SignalR Core client to connect directly to
+livetiming.formula1.com and capture live timing data. Requires an
+F1TV Access/Pro/Premium subscription for full telemetry (CarData.z,
+Position.z).
 
 Two modes:
   1. RECORD: Capture live data to a file during the session
-  2. ANALYZE: Parse and visualize a previously recorded file
+  2. ANALYZE: Parse and display summary of a previously recorded file
 
 Usage:
   # Record live data (run this DURING the session)
@@ -17,73 +18,70 @@ Usage:
   # Record with longer timeout (useful for long gaps between runs)
   python src/live_telemetry.py record bahrain_test_day1.txt --timeout 300
 
+  # Record without F1TV auth (partial data only)
+  python src/live_telemetry.py record bahrain_test_day1.txt --no-auth
+
   # Analyze recorded data
   python src/live_telemetry.py analyze bahrain_test_day1.txt
 
-  # You can also use FastF1's built-in CLI directly:
-  python -m fastf1.livetiming save bahrain_test_day1.txt --timeout 120
+  # Check F1TV authentication status
+  python src/live_telemetry.py auth --status
+
+  # Authenticate with F1TV (opens browser)
+  python src/live_telemetry.py auth --login
+
+  # Clear saved F1TV credentials
+  python src/live_telemetry.py auth --clear
 """
 
-# --- Fix: websockets 15.x + uvloop incompatibility ---
-# uvloop doesn't support the 'extra_headers' kwarg used by websockets 15.x
-# Force the default asyncio event loop policy BEFORE any async imports
-import asyncio
-try:
-    asyncio.set_event_loop_policy(asyncio.DefaultEventLoopPolicy())
-except Exception:
-    pass
-
 import argparse
-import concurrent.futures
 import json
 import logging
 import os
 import sys
 import time
-import zlib
-import base64
-from collections import defaultdict
-from datetime import datetime
 from typing import Optional
 
 import pandas as pd
 
 from fastf1.livetiming.client import SignalRClient
 from fastf1.livetiming.data import LiveTimingData
+from signalrcore.messages.completion_message import CompletionMessage
 
 
 # ─── Enhanced SignalR Client with Real-Time Console Output ─────────────────
 
 class LiveTelemetryClient(SignalRClient):
-    """Extended SignalR client that prints live data to console while recording.
-    
-    Inherits from FastF1's SignalRClient and adds real-time console display
-    of incoming timing data, car data, and position updates.
+    """Extended SignalR Core client that prints live data to console
+    while recording.
+
+    Inherits from FastF1's SignalRClient (v3.8.0+) and adds real-time
+    console display of incoming timing data, car data, and position updates.
+
+    The new FastF1 v3.8.0 client uses:
+      - signalrcore (SignalR Core protocol) instead of the old websockets
+      - Synchronous execution (no asyncio)
+      - F1TV account authentication via get_auth_token()
     """
 
     def __init__(self, filename: str, filemode: str = 'w',
                  timeout: int = 120, verbose: bool = True,
-                 logger: Optional[logging.Logger] = None):
+                 logger: Optional[logging.Logger] = None,
+                 no_auth: bool = False):
         super().__init__(filename=filename, filemode=filemode,
-                         debug=False, timeout=timeout, logger=logger)
+                         timeout=timeout, logger=logger,
+                         no_auth=no_auth)
         self.verbose = verbose
         self._msg_count = 0
         self._categories_seen = set()
         self._latest_timing = {}
         self._latest_driver_list = {}
 
-    async def _on_message(self, msg):
-        """Override to add real-time console display."""
-        self._t_last_message = time.time()
+    def _on_message(self, msg):
+        """Override to add real-time console display after writing to file."""
+        # Call parent to handle file writing
+        super()._on_message(msg)
         self._msg_count += 1
-
-        # Write to file (original behavior)
-        loop = asyncio.get_running_loop()
-        try:
-            with concurrent.futures.ThreadPoolExecutor() as pool:
-                await loop.run_in_executor(pool, self._to_file, str(msg))
-        except Exception:
-            self.logger.exception("Exception while writing message to file")
 
         # Parse and display if verbose
         if self.verbose:
@@ -92,42 +90,56 @@ class LiveTelemetryClient(SignalRClient):
     def _display_message(self, msg):
         """Parse and display a SignalR message in the console."""
         try:
-            if isinstance(msg, list) and len(msg) >= 2:
+            # v3.8.0 messages can be CompletionMessage or list
+            if isinstance(msg, CompletionMessage):
+                # Initial subscription response — multiple categories
+                if msg.result and isinstance(msg.result, dict):
+                    for category, data in msg.result.items():
+                        self._categories_seen.add(category)
+                        self._route_category(category, data, "")
+
+            elif isinstance(msg, list) and len(msg) >= 2:
                 category = msg[0]
                 data = msg[1]
                 timestamp = msg[2] if len(msg) > 2 else ""
-
                 self._categories_seen.add(category)
+                self._route_category(category, data, timestamp)
 
-                if category == "TimingData":
-                    self._display_timing_data(data, timestamp)
-                elif category == "CarData.z":
-                    self._display_car_data(data, timestamp)
-                elif category == "Position.z":
-                    self._display_position_data(data, timestamp)
-                elif category == "WeatherData":
-                    self._display_weather(data, timestamp)
-                elif category == "RaceControlMessages":
-                    self._display_race_control(data, timestamp)
-                elif category == "TrackStatus":
-                    self._display_track_status(data, timestamp)
-                elif category == "SessionInfo":
-                    self._display_session_info(data, timestamp)
-                elif category == "DriverList":
-                    self._update_driver_list(data)
-                elif category == "SessionData":
-                    self._display_session_data(data, timestamp)
-                elif category == "LapCount":
-                    self._display_lap_count(data, timestamp)
+            # Periodic status line
+            if self._msg_count % 50 == 0:
+                cats = ", ".join(sorted(self._categories_seen))
+                has_car = "CarData.z" in self._categories_seen
+                has_pos = "Position.z" in self._categories_seen
+                telemetry_status = "✅ FULL" if (has_car and has_pos) else "⚠️  TIMING ONLY"
+                print(f"\n📊 [{self._msg_count} messages] "
+                      f"Telemetry: {telemetry_status}")
+                print(f"   Categories: {cats}\n")
 
-                # Periodic status line
-                if self._msg_count % 50 == 0:
-                    cats = ", ".join(sorted(self._categories_seen))
-                    print(f"\n📊 [{self._msg_count} messages] "
-                          f"Categories received: {cats}\n")
-
-        except Exception as e:
+        except Exception:
             pass  # Don't crash on display errors
+
+    def _route_category(self, category, data, timestamp):
+        """Route a message to the appropriate display handler."""
+        if category == "TimingData":
+            self._display_timing_data(data, timestamp)
+        elif category == "CarData.z":
+            self._display_car_data(data, timestamp)
+        elif category == "Position.z":
+            self._display_position_data(data, timestamp)
+        elif category == "WeatherData":
+            self._display_weather(data, timestamp)
+        elif category == "RaceControlMessages":
+            self._display_race_control(data, timestamp)
+        elif category == "TrackStatus":
+            self._display_track_status(data, timestamp)
+        elif category == "SessionInfo":
+            self._display_session_info(data, timestamp)
+        elif category == "DriverList":
+            self._update_driver_list(data)
+        elif category == "SessionData":
+            self._display_session_data(data, timestamp)
+        elif category == "LapCount":
+            self._display_lap_count(data, timestamp)
 
     def _get_driver_name(self, driver_num: str) -> str:
         """Look up driver abbreviation from number."""
@@ -154,11 +166,11 @@ class LiveTelemetryClient(SignalRClient):
         """Display timing updates (lap times, sectors, gaps)."""
         if not isinstance(data, dict) or "Lines" not in data:
             return
-        
+
         for driver_num, driver_data in data["Lines"].items():
             if not isinstance(driver_data, dict):
                 continue
-            
+
             name = self._get_driver_name(driver_num)
             parts = []
 
@@ -169,14 +181,14 @@ class LiveTelemetryClient(SignalRClient):
                     parts.append(f"Lap: {lt['Value']}")
 
             # Sector times
-            for i in range(1, 4):
-                key = f"Sector{i}"  # Sectors key varies
-                if "Sectors" in driver_data:
-                    sectors = driver_data["Sectors"]
-                    if isinstance(sectors, dict) and str(i-1) in sectors:
-                        sec = sectors[str(i-1)]
-                        if isinstance(sec, dict) and "Value" in sec:
-                            parts.append(f"S{i}: {sec['Value']}")
+            if "Sectors" in driver_data:
+                sectors = driver_data["Sectors"]
+                if isinstance(sectors, dict):
+                    for i in range(3):
+                        if str(i) in sectors:
+                            sec = sectors[str(i)]
+                            if isinstance(sec, dict) and "Value" in sec:
+                                parts.append(f"S{i+1}: {sec['Value']}")
 
             # Speed traps
             if "Speeds" in driver_data:
@@ -202,12 +214,14 @@ class LiveTelemetryClient(SignalRClient):
                 print(f"⏱️  [{ts}] {name:>4} │ {' │ '.join(parts)}")
 
     def _display_car_data(self, data, timestamp):
-        """Car telemetry arrives compressed — just show receipt."""
-        pass  # CarData.z is zlib-compressed, heavy to decode in real-time
+        """CarData.z arrives compressed — show receipt confirmation."""
+        if self._msg_count <= 10:
+            print(f"📡 CarData.z received (compressed telemetry stream active)")
 
     def _display_position_data(self, data, timestamp):
-        """Position data arrives compressed — just show receipt."""
-        pass  # Position.z is zlib-compressed
+        """Position.z arrives compressed — show receipt confirmation."""
+        if self._msg_count <= 10:
+            print(f"📍 Position.z received (position stream active)")
 
     def _display_weather(self, data, timestamp):
         """Display weather updates."""
@@ -276,7 +290,7 @@ class LiveTelemetryClient(SignalRClient):
 
 def analyze_recorded_data(filename: str):
     """Parse and display summary of a recorded live timing file.
-    
+
     Args:
         filename: Path to the recorded .txt file
     """
@@ -287,19 +301,40 @@ def analyze_recorded_data(filename: str):
 
     categories = livedata.list_categories()
     print(f"📊 Available data categories ({len(categories)}):")
+
+    has_car_data = False
+    has_position = False
     for cat in sorted(categories):
         entries = livedata.get(cat)
-        print(f"   • {cat}: {len(entries)} entries")
+        marker = ""
+        if cat == "CarData.z":
+            has_car_data = True
+            marker = " ✅"
+        elif cat == "Position.z":
+            has_position = True
+            marker = " ✅"
+        print(f"   • {cat}: {len(entries)} entries{marker}")
+
+    if has_car_data and has_position:
+        print(f"\n✅ Full telemetry available (CarData.z + Position.z)")
+    else:
+        missing = []
+        if not has_car_data:
+            missing.append("CarData.z")
+        if not has_position:
+            missing.append("Position.z")
+        print(f"\n⚠️  Missing: {', '.join(missing)}")
+        print(f"   Tip: Use --no-auth=false and ensure F1TV subscription is active")
 
     print(f"\n{'='*60}")
     print("To load this data into FastF1 for full telemetry analysis:")
-    print("="*60)
-    print("""
+    print("=" * 60)
+    print(f"""
 from fastf1.livetiming.data import LiveTimingData
 import fastf1
 
 # Load the recorded data
-livedata = LiveTimingData('""" + filename + """')
+livedata = LiveTimingData('{filename}')
 
 # Use it with FastF1's session loading
 session = fastf1.get_testing_session(2026, 2, 1)  # Test 2, Day 1
@@ -320,17 +355,23 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Record live data during a session
+  # Record live data during a session (with F1TV auth)
   python src/live_telemetry.py record bahrain_test_day1.txt
 
   # Record with 5-minute timeout (for long gaps between runs)
   python src/live_telemetry.py record bahrain_test_day1.txt --timeout 300
+
+  # Record without auth (timing data only, no CarData.z)
+  python src/live_telemetry.py record bahrain_test_day1.txt --no-auth
 
   # Quietly record (no console output)
   python src/live_telemetry.py record bahrain_test_day1.txt --quiet
 
   # Analyze a recorded file
   python src/live_telemetry.py analyze bahrain_test_day1.txt
+
+  # Check F1TV auth status
+  python src/live_telemetry.py auth --status
         """
     )
 
@@ -345,10 +386,22 @@ Examples:
                      help="Append to existing file instead of overwriting")
     rec.add_argument("--quiet", action="store_true",
                      help="Don't print live data to console")
+    rec.add_argument("--no-auth", action="store_true",
+                     help="Skip F1TV authentication (partial data only)")
 
     # Analyze command
     ana = subparsers.add_parser("analyze", help="Analyze recorded data")
     ana.add_argument("file", type=str, help="Recorded data file (.txt)")
+
+    # Auth command
+    auth = subparsers.add_parser("auth", help="Manage F1TV authentication")
+    auth_group = auth.add_mutually_exclusive_group(required=True)
+    auth_group.add_argument("--status", action="store_true",
+                            help="Check current auth status")
+    auth_group.add_argument("--login", action="store_true",
+                            help="Authenticate with F1TV (opens browser)")
+    auth_group.add_argument("--clear", action="store_true",
+                            help="Clear saved authentication token")
 
     args = parser.parse_args()
 
@@ -358,14 +411,23 @@ Examples:
 
     if args.command == "record":
         print("=" * 60)
-        print("🏎️  F1 Live Telemetry Recorder")
+        print("🏎️  F1 Live Telemetry Recorder (FastF1 v3.8.0)")
         print("=" * 60)
         print(f"📁 Output file:  {args.file}")
         print(f"⏱️  Timeout:      {args.timeout}s")
         print(f"📝 Mode:         {'append' if args.append else 'overwrite'}")
         print(f"🔊 Verbose:      {not args.quiet}")
+        print(f"🔐 Auth:         {'disabled (--no-auth)' if args.no_auth else 'F1TV'}")
         print("=" * 60)
-        print("\nConnecting to livetiming.formula1.com/signalr ...")
+
+        if not args.no_auth:
+            print("\n🔐 Authenticating with F1TV account...")
+            print("   (First time? A browser window will open for login)\n")
+        else:
+            print("\n⚠️  Running without auth — CarData.z/Position.z may not")
+            print("   be available. Use F1TV auth for full telemetry.\n")
+
+        print("Connecting to livetiming.formula1.com/signalrcore ...")
         print("Press Ctrl+C to stop recording\n")
 
         mode = "a" if args.append else "w"
@@ -374,6 +436,7 @@ Examples:
             filemode=mode,
             timeout=args.timeout,
             verbose=not args.quiet,
+            no_auth=args.no_auth,
         )
         client.start()
 
@@ -382,6 +445,31 @@ Examples:
             print(f"❌ File not found: {args.file}")
             sys.exit(1)
         analyze_recorded_data(args.file)
+
+    elif args.command == "auth":
+        from fastf1.internals.f1auth import (
+            get_auth_token, clear_auth_token,
+            print_auth_status, print_auth_token
+        )
+
+        if args.status:
+            print("\n🔐 F1TV Authentication Status\n" + "=" * 40)
+            print_auth_status()
+
+        elif args.login:
+            print("\n🔐 Starting F1TV authentication...")
+            print("   A browser window will open for login.\n")
+            token = get_auth_token()
+            if token:
+                print("\n✅ Authentication successful!")
+                print("   Token is cached — you won't need to login again")
+                print("   until it expires.\n")
+            else:
+                print("\n❌ Authentication failed. Please try again.\n")
+
+        elif args.clear:
+            clear_auth_token()
+            print("✅ Authentication token cleared.\n")
 
 
 if __name__ == "__main__":
