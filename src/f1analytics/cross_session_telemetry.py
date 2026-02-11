@@ -363,9 +363,8 @@ class CrossSessionTelemetry:
         
         # Create title
         event_name = primary_session['session'].event.EventName
-        year = primary_session['session'].event.year
         sessions_str = " vs ".join([spec['session_key'].upper() for spec in driver_specs])
-        title = f"{event_name} {year} - {session_label} ({sessions_str})"
+        title = f"{event_name} - {session_label} ({sessions_str})"
         
         fig.suptitle(title, color='white')
         fig.subplots_adjust(top=0.92)
@@ -395,16 +394,4 @@ class CrossSessionTelemetry:
         else:
             print(f"[WARN] Logo file not found at: {logo_path}")
         
-        plt.show()
-
-    def list_sessions(self):
-        """List all available sessions."""
-        print("Available sessions:")
-        for key, data in self.sessions.items():
-            print(f"  {key}: {data['session_name']} {data['year']} ({data['session_type']})")
-
-    def get_session_drivers(self, session_key):
-        """Get list of drivers available in a specific session."""
-        if session_key not in self.sessions:
-            raise ValueError(f"Session '{session_key}' not found")
-        return self.sessions[session_key]['laps']['Driver'].unique().tolist()            
+        plt.show()        

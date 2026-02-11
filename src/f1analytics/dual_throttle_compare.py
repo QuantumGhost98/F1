@@ -259,8 +259,3 @@ class DualThrottleComparisonVisualizer:
 
         plt.tight_layout()
         plt.show()
-
-    def save(self, path: str, figsize=(14, 10)):
-        """Render and save to a file path."""
-        self.plot(figsize=figsize)
-        plt.savefig(path, dpi=200, bbox_inches='tight')
