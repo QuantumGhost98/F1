@@ -3,15 +3,19 @@ import numpy as np
 import fastf1.plotting
 import fastf1
 import pandas as pd
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, StratifiedKFold, cross_val_score, GridSearchCV
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import classification_report, accuracy_score
+from sklearn.metrics import (
+    classification_report, 
+    accuracy_score, 
+    confusion_matrix,
+    precision_recall_fscore_support
+)
 import joblib
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
-#from sklearn.cluster import KMeans
-from f1analytics.config import REPO_ROOT
-from typing import Optional
+from f1analytics.config import REPO_ROOT, logger
+from typing import Optional, Dict, Any, Tuple
 from pathlib import Path
 
 
@@ -58,9 +62,9 @@ def build_training_data():
             
             # Store the transformed dataframe in the dictionary
             transformed_laps_dataframes[event] = transformed_laps
-            print(f"Transformed laps for {event} FP2 loaded successfully.")
+            logger.info(f"Transformed laps for {event} FP2 loaded successfully.")
         except Exception as e:
-            print(f"Failed to load data for {event}: {e}")
+            logger.warning(f"Failed to load data for {event}: {e}")
 
 
     def label_race_pace(dataframe, driver, min_time, max_time):
@@ -68,7 +72,7 @@ def build_training_data():
         driver_data = dataframe.pick_drivers(driver).copy()
 
         if driver_data.empty:
-            print(f"No data for driver: {driver}")
+            logger.warning(f"No data for driver: {driver}")
             return None
 
         # Remove fastest and slowest laps
@@ -166,40 +170,236 @@ def build_training_data():
     return all_training_data
 
 class RacePaceAnalyzer:
-    def __init__(self):
+    """ML pipeline for race pace prediction using Random Forest."""
+    
+    def __init__(self, random_state: int = 42):
+        self.random_state = random_state
         self.pipeline = Pipeline([
             ('scaler', StandardScaler()),
-            ('classifier', RandomForestClassifier(n_estimators=100, random_state=42))
+            ('classifier', RandomForestClassifier(n_estimators=100, random_state=random_state))
         ])
+        self.best_params_: Optional[Dict[str, Any]] = None
+        self.best_score_: Optional[float] = None
+        self.feature_names_ = ['LapTime (s)', 'LapTimeDifference', 'Consistency', 'Stint']
 
-    def train_model(self, data=None, test_size=0.2, random_state=42):
+    def train_model(
+        self, 
+        data: Optional[pd.DataFrame] = None, 
+        test_size: float = 0.2, 
+        cv: int = 5
+    ) -> Dict[str, Any]:
+        """Train the model with stratified K-fold cross-validation.
+        
+        Args:
+            data: Training data DataFrame. If None, builds from build_training_data().
+            test_size: Fraction of data to hold out for final test evaluation.
+            cv: Number of cross-validation folds.
+            
+        Returns:
+            Dictionary containing accuracy, classification report, CV scores, and feature importances.
+        """
         if data is None:
+            logger.info("Building training data...")
             data = build_training_data()
 
         data = data.copy()
 
-        feature_cols = [
-            'LapTime (s)',
-            'LapTimeDifference',
-            'Consistency',
-            'Stint'
-        ]
+        feature_cols = self.feature_names_
         X = data[feature_cols]
         y = data['is_race_pace']
 
+        # Train/test split for final evaluation
         X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=test_size, random_state=random_state, stratify=y
+            X, y, test_size=test_size, random_state=self.random_state, stratify=y
         )
 
+        # Cross-validation on training set
+        logger.info(f"Performing {cv}-fold stratified cross-validation...")
+        cv_splitter = StratifiedKFold(n_splits=cv, shuffle=True, random_state=self.random_state)
+        
+        cv_scores = cross_val_score(
+            self.pipeline, X_train, y_train, cv=cv_splitter, scoring='accuracy'
+        )
+        cv_precision = cross_val_score(
+            self.pipeline, X_train, y_train, cv=cv_splitter, scoring='precision'
+        )
+        cv_recall = cross_val_score(
+            self.pipeline, X_train, y_train, cv=cv_splitter, scoring='recall'
+        )
+        cv_f1 = cross_val_score(
+            self.pipeline, X_train, y_train, cv=cv_splitter, scoring='f1'
+        )
+        
+        logger.info(f"CV Accuracy: {cv_scores.mean():.4f} ± {cv_scores.std():.4f}")
+        logger.info(f"CV Precision: {cv_precision.mean():.4f} ± {cv_precision.std():.4f}")
+        logger.info(f"CV Recall: {cv_recall.mean():.4f} ± {cv_recall.std():.4f}")
+        logger.info(f"CV F1: {cv_f1.mean():.4f} ± {cv_f1.std():.4f}")
+
+        # Fit on full training set
+        logger.info("Fitting model on full training set...")
         self.pipeline.fit(X_train, y_train)
 
+        # Evaluate on test set
         y_pred = self.pipeline.predict(X_test)
-        print("Accuracy:", accuracy_score(y_test, y_pred))
-        print("Classification Report:\n", classification_report(y_test, y_pred))
+        test_accuracy = accuracy_score(y_test, y_pred)
+        test_report = classification_report(y_test, y_pred, output_dict=True)
+        
+        logger.info(f"Test Accuracy: {test_accuracy:.4f}")
+        logger.info(f"Test Classification Report:\n{classification_report(y_test, y_pred)}")
+        
+        # Get feature importances
+        feature_importances = self.get_feature_importance()
+        
+        results = {
+            'cv_accuracy': cv_scores,
+            'cv_precision': cv_precision,
+            'cv_recall': cv_recall,
+            'cv_f1': cv_f1,
+            'test_accuracy': test_accuracy,
+            'test_classification_report': test_report,
+            'feature_importances': feature_importances
+        }
+        
+        return results
 
-    def predict(self, data):
-        #Preduct using the trained model
+    def predict(self, data: pd.DataFrame) -> np.ndarray:
+        """Predict using the trained model."""
         return self.pipeline.predict(data)
+    
+    def tune_hyperparameters(
+        self,
+        data: Optional[pd.DataFrame] = None,
+        param_grid: Optional[Dict[str, list]] = None,
+        cv: int = 5,
+        scoring: str = 'f1',
+        n_jobs: int = -1
+    ) -> Dict[str, Any]:
+        """Perform grid search for hyperparameter tuning.
+        
+        Args:
+            data: Training data. If None, builds from build_training_data().
+            param_grid: Parameter grid for GridSearchCV. If None, uses default grid.
+            cv: Number of cross-validation folds.
+            scoring: Scoring metric for optimization.
+            n_jobs: Number of parallel jobs (-1 for all cores).
+            
+        Returns:
+            Dictionary with best_params, best_score, and cv_results.
+        """
+        if data is None:
+            logger.info("Building training data...")
+            data = build_training_data()
+            
+        data = data.copy()
+        
+        if param_grid is None:
+            param_grid = {
+                'classifier__n_estimators': [50, 100, 200, 300],
+                'classifier__max_depth': [None, 5, 10, 20],
+                'classifier__min_samples_split': [2, 5, 10],
+                'classifier__min_samples_leaf': [1, 2, 4],
+            }
+        
+        feature_cols = self.feature_names_
+        X = data[feature_cols]
+        y = data['is_race_pace']
+        
+        logger.info(f"Starting GridSearchCV with {cv}-fold CV and scoring={scoring}...")
+        logger.info(f"Parameter grid: {param_grid}")
+        
+        grid_search = GridSearchCV(
+            self.pipeline,
+            param_grid=param_grid,
+            cv=StratifiedKFold(n_splits=cv, shuffle=True, random_state=self.random_state),
+            scoring=scoring,
+            n_jobs=n_jobs,
+            verbose=2,
+            return_train_score=True
+        )
+        
+        grid_search.fit(X, y)
+        
+        self.best_params_ = grid_search.best_params_
+        self.best_score_ = grid_search.best_score_
+        
+        # Update pipeline with best parameters
+        self.pipeline = grid_search.best_estimator_
+        
+        logger.info(f"Best parameters: {self.best_params_}")
+        logger.info(f"Best {scoring} score: {self.best_score_:.4f}")
+        
+        return {
+            'best_params': self.best_params_,
+            'best_score': self.best_score_,
+            'cv_results': pd.DataFrame(grid_search.cv_results_)
+        }
+    
+    def get_feature_importance(self, plot: bool = False) -> pd.DataFrame:
+        """Get feature importances from the trained Random Forest.
+        
+        Args:
+            plot: If True, display a horizontal bar chart of importances.
+            
+        Returns:
+            DataFrame with features and their importance scores, sorted descending.
+        """
+        if not hasattr(self.pipeline.named_steps['classifier'], 'feature_importances_'):
+            raise ValueError("Model must be trained before getting feature importances.")
+        
+        importances = self.pipeline.named_steps['classifier'].feature_importances_
+        feature_importance_df = pd.DataFrame({
+            'feature': self.feature_names_,
+            'importance': importances
+        }).sort_values('importance', ascending=False)
+        
+        if plot:
+            plt.figure(figsize=(10, 6))
+            plt.barh(feature_importance_df['feature'], feature_importance_df['importance'])
+            plt.xlabel('Importance')
+            plt.ylabel('Feature')
+            plt.title('Feature Importances')
+            plt.gca().invert_yaxis()
+            plt.tight_layout()
+            plt.show()
+        
+        return feature_importance_df
+    
+    def evaluate_model(
+        self, 
+        X_test: pd.DataFrame, 
+        y_test: pd.Series
+    ) -> Dict[str, Any]:
+        """Evaluate the model on held-out test data.
+        
+        Args:
+            X_test: Test features.
+            y_test: Test labels.
+            
+        Returns:
+            Dictionary containing accuracy, precision, recall, F1, and confusion matrix.
+        """
+        y_pred = self.pipeline.predict(X_test)
+        
+        accuracy = accuracy_score(y_test, y_pred)
+        precision, recall, f1, _ = precision_recall_fscore_support(
+            y_test, y_pred, average='binary'
+        )
+        conf_matrix = confusion_matrix(y_test, y_pred)
+        
+        logger.info(f"Evaluation Results:")
+        logger.info(f"  Accuracy:  {accuracy:.4f}")
+        logger.info(f"  Precision: {precision:.4f}")
+        logger.info(f"  Recall:    {recall:.4f}")
+        logger.info(f"  F1 Score:  {f1:.4f}")
+        logger.info(f"  Confusion Matrix:\n{conf_matrix}")
+        
+        return {
+            'accuracy': accuracy,
+            'precision': precision,
+            'recall': recall,
+            'f1': f1,
+            'confusion_matrix': conf_matrix
+        }
     
     def save_model(self, path: Optional[str] = None):
         """
@@ -213,7 +413,7 @@ class RacePaceAnalyzer:
             
         out_path.parent.mkdir(parents=True, exist_ok=True)
         joblib.dump(self.pipeline, out_path)
-        print(f"Pipeline saved to {out_path}")
+        logger.info(f"Pipeline saved to {out_path}")
 
 
     def load_model(self, path: Optional[str] = None):
@@ -235,7 +435,7 @@ class RacePaceAnalyzer:
             raise FileNotFoundError(f"Model file not found at {in_path}")
             
         self.pipeline = joblib.load(in_path)
-        print(f"Pipeline loaded successfully from {in_path}")
+        logger.info(f"Pipeline loaded successfully from {in_path}")
                
     @staticmethod
     def add_consistency_feature(dataframe, window_size, max_diff, n_to_remove=2):
