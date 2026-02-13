@@ -1,17 +1,21 @@
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-import matplotlib.colors as mcolors
-import matplotlib.image as mpimg
 import os
 from f1analytics.delta_time_sector_constrained import delta_time
 from f1analytics.interpolate_df import interpolate_dataframe
 from f1analytics.timedelta_to_seconds import timedelta_to_seconds
 import warnings
 from scipy.signal import savgol_filter
-import sys
 from f1analytics.colors_pilots import colors_pilots
-import re
+from f1analytics.config import logger
+from f1analytics.corner_utils import (
+    corner_identifier_to_index, corner_label, indices_between,
+    compress_indices_to_ranges, format_corner_label_list, resolve_corner_idxs,
+)
+from f1analytics.plot_utils import (
+    assign_colors_simple, setup_dark_theme, add_branding, finalize_plot,
+)
 
 class CornerAnalysis:
     """
@@ -42,66 +46,8 @@ class CornerAnalysis:
         self.transformed_laps = self.laps.copy()
         self.transformed_laps.loc[:, "LapTime (s)"] = self.laps["LapTime"].dt.total_seconds()
 
-        # Normalize user-provided corner_idxs. Accepts:
-        # - single int or string label (e.g., 3, "1A")
-        # - iterable of items which can be:
-        #     * ints/strings
-        #     * two-length iterables (lists/tuples) indicating inclusive ranges, e.g., [3,4] or ("3", "4B")
-        #     * strings with a hyphen indicating an inclusive range, e.g., "3-5" or "1A-2B"
-        def resolve_single(ci):
-            return self._corner_identifier_to_index(ci)
-
-        def expand_item(item):
-            """Return a list of corner *indices* expanded from the given item."""
-            # Range encoded as string with '-': "3-5" or "1A-2B"
-            if isinstance(item, str) and '-' in item:
-                left, right = [p.strip() for p in item.split('-', 1)]
-                a = resolve_single(left)
-                b = resolve_single(right)
-                return self._indices_between(a, b)
-
-            # Simple scalar (int/str corner id)
-            if isinstance(item, (int, str)):
-                return [resolve_single(item)]
-
-            # Two-length iterable representing inclusive range, e.g., [3,4] or ("3","4B")
-            if hasattr(item, '__iter__') and not isinstance(item, (bytes, bytearray)):
-                try:
-                    it = list(item)
-                except Exception:
-                    raise ValueError(f"Invalid corner item: {item}")
-                if len(it) == 2 and all(isinstance(x, (int, str)) for x in it):
-                    a = resolve_single(it[0])
-                    b = resolve_single(it[1])
-                    return self._indices_between(a, b)
-                # Nested iterables: flatten recursively
-                expanded = []
-                for sub in it:
-                    expanded.extend(expand_item(sub))
-                return expanded
-
-            raise ValueError(f"Invalid corner item: {item}")
-
-        # Build full list, de-duplicate while preserving order
-        if isinstance(corner_idxs, (int, str)):
-            raw_indices = expand_item(corner_idxs)
-        elif hasattr(corner_idxs, '__iter__'):
-            raw_indices = []
-            for it in corner_idxs:
-                raw_indices.extend(expand_item(it))
-        else:
-            raise ValueError("corner_idxs must be an int, string like '1A', or iterable thereof")
-
-        # Preserve order and uniqueness
-        seen = set()
-        self.corner_list = []
-        for idx in raw_indices:
-            if idx not in seen:
-                seen.add(idx)
-                self.corner_list.append(idx)
-
-        if not self.corner_list:
-            raise ValueError("No valid corners resolved from corner_idxs")
+        # Resolve corners using the shared utility
+        self.corner_list = resolve_corner_idxs(self.circuit_info, corner_idxs)
 
         self.start_idx = min(self.corner_list)
         self.end_idx = max(self.corner_list)
@@ -111,85 +57,21 @@ class CornerAnalysis:
         self._load_data()
         self.palette = self._assign_colors()
 
+    # Backward-compatible wrappers delegating to shared utilities
     def _corner_identifier_to_index(self, label):
-        """
-        Resolve a corner identifier like 3, "3", "1A", "12B" to the
-        DataFrame index in self.circuit_info.corners.
-        """
-        corner_df = self.circuit_info.corners
-        zero_based_numbering = corner_df['Number'].min() == 0
-
-        # Parse input like '12A'
-        s = str(label).strip()
-        m = re.fullmatch(r'(\d+)([A-Za-z]?)', s)
-        if not m:
-            raise ValueError(f"Invalid corner identifier '{label}' (expected digits with optional letter)")
-
-        display_num = int(m.group(1))
-        letter = m.group(2).upper()
-
-        # Adjust for zero-based corner numbering if needed
-        internal_number = display_num - 1 if zero_based_numbering else display_num
-
-        # Filter by number
-        subset = corner_df[corner_df['Number'] == internal_number]
-        if subset.empty:
-            raise ValueError(f"Corner number '{display_num}' not found in circuit_info.corners")
-
-        # Filter by letter if given
-        if letter:
-            subset = subset[subset['Letter'].astype(str).str.upper() == letter]
-            if subset.empty:
-                raise ValueError(f"Corner '{label}' not found (number {display_num} with letter '{letter}')")
-        else:
-            # Prefer no-letter version if multiple rows for same number
-            no_letter_mask = subset['Letter'].isna() | (subset['Letter'].astype(str).str.strip() == '')
-            subset = subset[no_letter_mask] if not subset[no_letter_mask].empty else subset
-
-        # Return the *DataFrame index* (this is the position used by circuit_info.corners['Distance'])
-        return subset.index[0]
+        return corner_identifier_to_index(self.circuit_info, label)
 
     def _corner_label(self, apex_idx):
-        """Return combined Number+Letter label for a given corner index (handles zero-based Number)."""
-        corner_df = self.circuit_info.corners
-        zero_based = corner_df['Number'].min() == 0
-        row = corner_df.iloc[apex_idx]
-        num = int(row['Number']) + (1 if zero_based else 0)
-        letter = ''
-        if 'Letter' in corner_df.columns and pd.notna(row.get('Letter', None)) and str(row['Letter']).strip():
-            letter = str(row['Letter']).strip()
-        return f"{num}{letter}"
+        return corner_label(self.circuit_info, apex_idx)
 
     def _indices_between(self, a_idx, b_idx):
-        """Inclusive list of DataFrame indices between two apex indices (order-agnostic)."""
-        start, end = sorted((int(a_idx), int(b_idx)))
-        return list(range(start, end + 1))
+        return indices_between(a_idx, b_idx)
 
     def _compress_indices_to_ranges(self, idx_list):
-        """Compress a sorted list of integer indices into list of (start,end) tuples for contiguous runs."""
-        if not idx_list:
-            return []
-        sorted_idxs = sorted(idx_list)
-        ranges = []
-        run_start = prev = sorted_idxs[0]
-        for x in sorted_idxs[1:]:
-            if x == prev + 1:
-                prev = x
-                continue
-            ranges.append((run_start, prev))
-            run_start = prev = x
-        ranges.append((run_start, prev))
-        return ranges
+        return compress_indices_to_ranges(idx_list)
 
     def _format_corner_label_list(self, idx_list):
-        """Return a compact label like '1,3-4,6' from a list of corner apex indices."""
-        parts = []
-        for a, b in self._compress_indices_to_ranges(idx_list):
-            if a == b:
-                parts.append(self._corner_label(a))
-            else:
-                parts.append(f"{self._corner_label(a)}-{self._corner_label(b)}")
-        return ",".join(parts)
+        return format_corner_label_list(self.circuit_info, idx_list)
 
     def _load_data(self):
         """Load and interpolate telemetry for each driver based on lap selection, storing both lap and telemetry."""
@@ -209,34 +91,7 @@ class CornerAnalysis:
             self.lap_objs[d] = lap
 
     def _assign_colors(self):
-        fallback_shades = {
-            'red': ['white', 'lightcoral'],
-            'blue': ['cyan', 'lightblue'],
-            'orange': ['gold', 'wheat'],
-            'grey': ['white', 'silver'],
-            'green': ['lime', 'springgreen'],
-            'pink': ['violet', 'lightpink'],
-            'olive': ['khaki'],
-            'navy': ['skyblue'],
-            '#9932CC': ['plum'],
-            'lime': ['yellowgreen']
-        }
-
-        used_colors = {}
-        palette = []
-
-        for driver in self.drivers:
-            base_color = colors_pilots.get(driver, 'white')
-            count = used_colors.get(base_color, 0)
-            if count == 0:
-                palette.append(base_color)
-            else:
-                fallback = fallback_shades.get(base_color, ['white'])
-                alt_color = fallback[count - 1] if count - 1 < len(fallback) else 'white'
-                palette.append(alt_color)
-            used_colors[base_color] = count + 1
-
-        return palette
+        return assign_colors_simple(self.drivers)
 
     def get_corner_df(self, driver):
         df = self.telemetry[driver]
@@ -250,12 +105,14 @@ class CornerAnalysis:
         dfc['Acc'] = np.gradient(dfc['Speed_ms'], dfc['Sess_s'])
         return dfc
 
-    def plot_all(self, channels=None):
+    def plot_all(self, channels=None, save_path=None):
         """
         Plot requested channels around the corner(s). Acceptable channel names include
     'Speed', 'Throttle', 'Brake', and delta aliases ('Delta', 'DeltaTime', 'Δ').
     If multiple drivers are compared, delta-time is shown by default unless channels
     are provided without a delta alias.
+
+        Returns (fig, axes).
         """
         default_channels = ['Speed', 'Throttle', 'Brake']
         user_provided_channels = channels is not None
@@ -284,19 +141,15 @@ class CornerAnalysis:
         else:
             axes_list = [axs]
 
-        # dark style
-        plt.style.use('dark_background')
-        fig.patch.set_facecolor('black')
-        for ax in axes_list:
-            ax.set_facecolor('black')
+        setup_dark_theme(fig, axes_list)
 
         # Build title text for single or multiple corners (compact: e.g., 1,3-4,6)
         if len(self.corner_list) == 1:
-            corner_label = f"Corner {self._corner_label(self.corner_list[0])}"
+            corner_label_str = f"Corner {self._corner_label(self.corner_list[0])}"
         else:
-            corner_label = f"Corners {self._format_corner_label_list(self.corner_list)}"
+            corner_label_str = f"Corners {self._format_corner_label_list(self.corner_list)}"
 
-        title = f"{self.session_name} {self.year} {self.session_type} {corner_label}"
+        title = f"{self.session_name} {self.year} {self.session_type} {corner_label_str}"
         fig.suptitle(title, color='white')
         fig.subplots_adjust(top=0.92)
 
@@ -347,7 +200,7 @@ class CornerAnalysis:
         else:
             # if user explicitly asked for delta with only one driver, gently note it
             if wants_delta_token and len(self.drivers) == 1:
-                print("[INFO] Delta requested but only one driver provided; skipping Δ plot.")
+                logger.info("Delta requested but only one driver provided; skipping Δ plot.")
 
         # Throttle scatter (optional)
         if include_throttle_scatter:
@@ -371,19 +224,13 @@ class CornerAnalysis:
         if axes_list:
             axes_list[-1].set_xlabel('Distance (m)', color='white')
 
-        # Signature & logo (layout first, then logo to avoid tight_layout warning)
+        # Signature & logo
         plt.tight_layout(rect=[0, 0, 0.95, 0.93])
-        fig.text(0.95, 0.91, "Provided by: Pietro Paolo Melella",
-                ha='right', va='bottom', color='white', fontsize=15)
+        add_branding(fig, text_pos=(0.95, 0.91), logo_pos=[0.80, 0.91, 0.08, 0.08])
 
-        sys.path.append('/Users/PietroPaolo/Desktop/GitHub/F1/')
-        logo_path = os.path.join('/Users/PietroPaolo/Desktop/GitHub/F1/', 'logo-square.png')
-        if os.path.exists(logo_path):
-            logo_img = mpimg.imread(logo_path)
-            logo_ax = fig.add_axes([0.80, 0.91, 0.08, 0.08], anchor='NE', zorder=10)
-            logo_ax.imshow(logo_img)
-            logo_ax.axis('off')
-        else:
-            print(f"[WARN] Logo file not found at: {logo_path}")
+        if save_path:
+            fig.savefig(save_path, dpi=300, bbox_inches='tight', facecolor=fig.get_facecolor())
+            logger.info("Saved plot to %s", save_path)
 
         plt.show()
+        return fig, axes_list

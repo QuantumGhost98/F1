@@ -65,7 +65,9 @@ def build_laps_df(decoded_dir, drivers):
     laps_records = []
     
     # Track lap completions from TimingData updates
-    lap_updates = {}  # driver_num -> {lap_num -> {time, sectors, speeds, ...}}
+    lap_updates = {}   # driver_num -> {lap_num -> {time, sectors, speeds, ...}}
+    current_lap = {}   # driver_num -> current NumberOfLaps (tracks lap in progress)
+    pending = {}       # driver_num -> {sector/speed data for the lap being driven}
     
     for entry in timing_data:
         data = entry.get('data', {})
@@ -78,11 +80,35 @@ def build_laps_df(decoded_dir, drivers):
             
             if num not in lap_updates:
                 lap_updates[num] = {}
+            if num not in pending:
+                pending[num] = {}
             
-            # Lap completion
-            lt = d.get('LastLapTime', {})
+            # Update current lap number when F1 sends it
             nl = d.get('NumberOfLaps')
+            if nl is not None:
+                current_lap[num] = nl
             
+            # Sectors — accumulate into pending BEFORE lap completion check
+            # (Sector 3 arrives in the same message as LastLapTime/NumberOfLaps)
+            sectors = d.get('Sectors', {})
+            if isinstance(sectors, list):
+                for i, sv in enumerate(sectors):
+                    if isinstance(sv, dict) and sv.get('Value', '') != '':
+                        pending[num][f'sector_{i+1}'] = sv['Value']
+            elif isinstance(sectors, dict):
+                for sk, sv in sectors.items():
+                    if isinstance(sv, dict) and sv.get('Value', '') != '':
+                        pending[num][f'sector_{int(sk)+1}'] = sv['Value']
+            
+            # Speeds — accumulate into pending BEFORE lap completion check
+            speeds = d.get('Speeds', {})
+            if isinstance(speeds, dict):
+                for trap, sv in speeds.items():
+                    if isinstance(sv, dict) and sv.get('Value', '') != '':
+                        pending[num][f'speed_{trap}'] = sv['Value']
+            
+            # Lap completion — merge pending data into this lap
+            lt = d.get('LastLapTime', {})
             if isinstance(lt, dict) and lt.get('Value') and nl is not None:
                 if nl not in lap_updates[num]:
                     lap_updates[num][nl] = {}
@@ -93,26 +119,23 @@ def build_laps_df(decoded_dir, drivers):
                     'personal_best': lt.get('PersonalFastest', False),
                     'overall_best': lt.get('OverallFastest', False),
                 })
-            
-            # Sectors
-            sectors = d.get('Sectors', {})
-            if isinstance(sectors, dict):
-                for sk, sv in sectors.items():
-                    if isinstance(sv, dict) and sv.get('Value'):
-                        if nl and nl not in lap_updates[num]:
-                            lap_updates[num][nl] = {}
-                        if nl:
-                            lap_updates[num][nl][f'sector_{int(sk)+1}'] = sv['Value']
-            
-            # Speeds
-            speeds = d.get('Speeds', {})
-            if isinstance(speeds, dict):
-                for trap, sv in speeds.items():
-                    if isinstance(sv, dict) and sv.get('Value'):
-                        if nl and nl not in lap_updates[num]:
-                            lap_updates[num][nl] = {}
-                        if nl:
-                            lap_updates[num][nl][f'speed_{trap}'] = sv['Value']
+                
+                # Merge all pending sector/speed data into this lap
+                for k, v in pending[num].items():
+                    if k not in lap_updates[num][nl]:
+                        lap_updates[num][nl][k] = v
+                
+                # Clear pending for next lap
+                pending[num] = {}
+    
+    # Final pass: merge any remaining pending data into the last known lap
+    for num, pdata in pending.items():
+        if pdata and num in current_lap:
+            nl = current_lap[num]
+            if nl in lap_updates.get(num, {}):
+                for k, v in pdata.items():
+                    if k not in lap_updates[num][nl]:
+                        lap_updates[num][nl][k] = v
     
     # Build laps records
     for num, laps in lap_updates.items():

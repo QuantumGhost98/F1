@@ -10,7 +10,10 @@ import joblib
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
 #from sklearn.cluster import KMeans
+from f1analytics.config import REPO_ROOT
+from typing import Optional
 from pathlib import Path
+
 
 # FastF1's default color scheme
 fastf1.plotting.setup_mpl(color_scheme='fastf1')
@@ -198,29 +201,39 @@ class RacePaceAnalyzer:
         #Preduct using the trained model
         return self.pipeline.predict(data)
     
-    def save_model(self, path: str = 'race_pace_pipeline.pkl'):
-        """Save the trained pipeline.
-        If `path` is relative, save it next to this module file so it can be loaded reliably regardless of CWD.
+    def save_model(self, path: Optional[str] = None):
         """
-        base = Path(__file__).resolve().parent
-        out_path = Path(path)
-        if not out_path.is_absolute():
-            out_path = (base / out_path).resolve()
+        Save the trained pipeline.
+        Default location: REPO_ROOT/models/race_pace_pipeline.pkl
+        """
+        if path is None:
+            out_path = REPO_ROOT / 'models' / 'race_pace_pipeline.pkl'
+        else:
+            out_path = Path(path)
+            
         out_path.parent.mkdir(parents=True, exist_ok=True)
         joblib.dump(self.pipeline, out_path)
         print(f"Pipeline saved to {out_path}")
 
 
-    def load_model(self, path: str = 'race_pace_pipeline.pkl'):
-        """Load a previously saved pipeline.
-        If `path` is relative, resolve it next to this module file so it works from any working directory.
+    def load_model(self, path: Optional[str] = None):
         """
-        base = Path(__file__).resolve().parent
-        in_path = Path(path)
-        if not in_path.is_absolute():
-            in_path = (base / in_path).resolve()
+        Load a previously saved pipeline.
+        Default location: REPO_ROOT/models/race_pace_pipeline.pkl
+        """
+        if path is None:
+            in_path = REPO_ROOT / 'models' / 'race_pace_pipeline.pkl'
+        else:
+            in_path = Path(path)
+
         if not in_path.exists():
+            # Fallback for backward compatibility or if user provided relative path
+            if not in_path.is_absolute():
+                 # Try relative to CWD first, then maybe check old location?
+                 # For now, just strict check
+                 pass
             raise FileNotFoundError(f"Model file not found at {in_path}")
+            
         self.pipeline = joblib.load(in_path)
         print(f"Pipeline loaded successfully from {in_path}")
                
@@ -300,7 +313,7 @@ class RacePaceAnalyzer:
 def main():
     analyzer = RacePaceAnalyzer()
     analyzer.train_model()
-    analyzer.save_model(path='race_pace_pipeline.pkl')
+    analyzer.save_model()
 
 if __name__ == "__main__":
     main()

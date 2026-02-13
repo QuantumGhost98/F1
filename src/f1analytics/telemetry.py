@@ -2,7 +2,6 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
-import matplotlib.image as mpimg
 import os
 from f1analytics.delta_time_sector_constrained import delta_time
 from f1analytics.interpolate_df import interpolate_dataframe
@@ -11,8 +10,14 @@ from f1analytics.lateral_acceleration import compute_lateral_acceleration
 from f1analytics.timedelta_to_seconds import timedelta_to_seconds
 import warnings
 from scipy.signal import savgol_filter
-import sys
 from f1analytics.colors_pilots import colors_pilots
+from f1analytics.config import logger
+from f1analytics.driver_utils import normalize_driver_specs
+from f1analytics.plot_utils import (
+    assign_colors, adjust_brightness, setup_dark_theme,
+    add_branding, finalize_plot,
+)
+from f1analytics.corner_utils import corner_label as _corner_label_util
 
 
 
@@ -35,7 +40,7 @@ class Telemetry:
         self.weather = session.weather_data
         self.circuit_info = session.get_circuit_info() if hasattr(session, "get_circuit_info") else None
         self.colors_pilots = colors_pilots
-        
+
     class FastestLap:
         """
         Wraps a fastest-lap record and provides convenience accessors.
@@ -55,18 +60,13 @@ class Telemetry:
             return d1, d2
 
 
-
+    # Keep as static methods for backward compat (they were class-level before)
+    @staticmethod
     def adjust_brightness(color, factor):
         """
         Lighten (factor>1) or darken (factor<1) an RGB color.
         """
-        try:
-            rgb = np.array(mcolors.to_rgb(color))
-            # scale and clip
-            adjusted = np.clip(rgb * factor, 0, 1)
-            return mcolors.to_hex(adjusted)
-        except Exception:
-            return color  # fallback
+        return adjust_brightness(color, factor)
 
     def assign_colors(self, driver_specs, driver_color_map=None, default_colors=None, fallback_shades=None):
         """
@@ -74,55 +74,15 @@ class Telemetry:
         Priority: driver_color_map[display_name] > driver_color_map[driver] > default_colors[driver] > 'white'
         Applies fallback shades when base color repeats; if exhausted, auto-adjust brightness.
         """
-        if default_colors is None:
-            default_colors = {}
-        if fallback_shades is None:
-            fallback_shades = {
-                'red': ['white', 'lightcoral'],
-                'blue': ['cyan', 'lightblue'],
-                'orange': ['white', 'wheat'],
-                'grey': ['white', 'silver'],
-                'green': ['lime', 'springgreen'],
-                'pink': ['violet', 'lightpink'],
-                'olive': ['khaki'],
-                'navy': ['skyblue'],
-                '#9932CC': ['plum'],
-                'lime': ['yellowgreen']
-            }
-
-        used = {}
-        palette = []
-        for spec in driver_specs:
-            driver = spec['driver']
-            display = spec['display_name']
-
-            # Determine base color
-            base_color = None
-            if driver_color_map:
-                base_color = driver_color_map.get(display, driver_color_map.get(driver))
-            if base_color is None:
-                base_color = default_colors.get(driver, 'white')
-
-            count = used.get(base_color, 0)
-            if count == 0:
-                color = base_color
-            else:
-                # try fallback shades first
-                alternates = fallback_shades.get(base_color, [])
-                if count - 1 < len(alternates):
-                    color = alternates[count - 1]
-                else:
-                    # auto adjust brightness for further duplicates
-                    # alternate lighten/darken
-                    factor = 1 + 0.2 * ((count - len(alternates)) % 2) * (1 if ((count - len(alternates)) // 2) % 2 == 0 else -1)
-                    color = self.adjust_brightness(base_color, factor)
-            used[base_color] = count + 1
-            palette.append(color)
-
-        return palette
+        return assign_colors(
+            driver_specs,
+            driver_color_map=driver_color_map,
+            default_colors=default_colors,
+            fallback_shades=fallback_shades,
+        )
 
 
-    def compare_laps(self, drivers, channels=None, session_label="", driver_color_map=None):
+    def compare_laps(self, drivers, channels=None, session_label="", driver_color_map=None, save_path=None):
         """
         Compare up to three laps (can be from the same or different drivers).
 
@@ -136,45 +96,13 @@ class Telemetry:
         - channels: list of telemetry fields to plot (can include 'Delta', 'Δ', etc.)
         - session_label: optional label for title
         - driver_color_map: optional override; keys can be driver codes or display names like "LEC_4"
-        """
-        # Normalize into driver_specs
-        driver_specs = []  # each: {'driver':..., 'lap':..., 'display_name':...}
-        if isinstance(drivers, dict):
-            for drv, lap_sel in drivers.items():
-                if isinstance(lap_sel, (list, tuple)):
-                    for sel in lap_sel:
-                        if sel == 'fastest':
-                            name = drv
-                        else:
-                            name = f"{drv}_{sel}"
-                        driver_specs.append({'driver': drv, 'lap': sel, 'display_name': name})
-                else:
-                    name = drv if lap_sel == 'fastest' else f"{drv}_{lap_sel}"
-                    driver_specs.append({'driver': drv, 'lap': lap_sel, 'display_name': name})
-        elif isinstance(drivers, (list, tuple)):
-            for entry in drivers:
-                if isinstance(entry, str):
-                    driver_specs.append({'driver': entry, 'lap': 'fastest', 'display_name': entry})
-                elif isinstance(entry, (list, tuple)) and len(entry) == 2:
-                    drv, lap_sel = entry
-                    if lap_sel == 'fastest':
-                        name = drv
-                    else:
-                        name = f"{drv}_{lap_sel}"
-                    driver_specs.append({'driver': drv, 'lap': lap_sel, 'display_name': name})
-                elif isinstance(entry, dict):
-                    if len(entry) != 1:
-                        raise ValueError(f"Invalid driver dict entry: {entry}")
-                    drv, lap_sel = next(iter(entry.items()))
-                    name = drv if lap_sel == 'fastest' else f"{drv}_{lap_sel}"
-                    driver_specs.append({'driver': drv, 'lap': lap_sel, 'display_name': name})
-                else:
-                    raise ValueError(f"Unsupported driver entry: {entry}")
-        else:
-            raise ValueError("drivers must be dict, list, or tuple of supported specs.")
+        - save_path: optional file path to save the figure
 
-        if not (1 <= len(driver_specs) <= 3):
-            raise ValueError("Must compare between 1 and 3 laps/drivers.")
+        Returns:
+        - (fig, axes) tuple
+        """
+        # Normalize into driver_specs using the shared utility
+        driver_specs = normalize_driver_specs(drivers)
 
         driver_codes = [spec['driver'] for spec in driver_specs]
         lap_selections = [spec['lap'] for spec in driver_specs]
@@ -235,8 +163,8 @@ class Telemetry:
         s1_dist, s2_dist = laps[baseline_idx].sector_distances
         corner_df = self.circuit_info.corners.copy().sort_values('Distance')
 
-        # Color assignment
-        palette = self.assign_colors(
+        # Color assignment via shared utility
+        palette = assign_colors(
             driver_specs,
             driver_color_map=driver_color_map,
             default_colors=globals().get('colors_pilots', None)
@@ -247,10 +175,7 @@ class Telemetry:
         fig, axes = plt.subplots(n_plots, 1, figsize=(14, 3.5 * n_plots), sharex=True)
         if n_plots == 1:
             axes = [axes]
-        plt.style.use('dark_background')
-        fig.patch.set_facecolor('black')
-        for ax in axes:
-            ax.set_facecolor('black')
+        setup_dark_theme(fig, axes)
 
         plot_idx = 0
         for ch in effective_channels:
@@ -294,8 +219,7 @@ class Telemetry:
             # Add sector lines
             ax_dt.axvline(s1_dist, color='white', linestyle='--')
             ax_dt.axvline(s2_dist, color='white', linestyle='--')
-            # Add white border contour to subplot
-            
+
             ax_dt.set_ylabel('Δ Time (s)', color='white')
             benchmark_color = palette[baseline_idx]
             ax_dt.axhline(0, color=benchmark_color, linestyle='--', linewidth=1.2)
@@ -331,14 +255,12 @@ class Telemetry:
                 color='white', fontsize=10,
                 bbox=dict(facecolor='black', alpha=0.5, pad=4))
 
-        fig.text(0.9, 0.96, "Provided by: Pietro Paolo Melella",
-                ha='right', va='bottom', color='white', fontsize=15)
         title = (f"{self.session.event['EventName']} {self.session.event.year} {session_label}"
                 if session_label else f"{self.session.event['EventName']} {self.session.event.year}")
         fig.suptitle(title, color='white')
         fig.subplots_adjust(top=0.92)
         plt.tight_layout(rect=[0, 0, 0.90, 0.94])
-        # ➕ Add white contour around each subplot
+        # Add white contour around each subplot
         for ax in axes:
             pos = ax.get_position()
             rect = plt.Rectangle(
@@ -349,16 +271,12 @@ class Telemetry:
                 linewidth=1.2
             )
             fig.patches.append(rect)
-            # Add logo below the "Provided by" text
-        sys.path.append('/Users/PietroPaolo/Desktop/GitHub/F1/')
-        logo_path = os.path.join('/Users/PietroPaolo/Desktop/GitHub/F1/', 'logo-square.png')  # or .jpg etc.
 
-        if os.path.exists(logo_path):
-            logo_img = mpimg.imread(logo_path)
-            # [left, bottom, width, height] — values are in 0–1 relative figure coords
-            logo_ax = fig.add_axes([0.80, 0.90, 0.06, 0.06], anchor='NE', zorder=10)
-            logo_ax.imshow(logo_img)
-            logo_ax.axis('off')
-        else:
-            print(f"[WARN] Logo file not found at: {logo_path}")
+        add_branding(fig, text_pos=(0.9, 0.96), logo_pos=[0.80, 0.90, 0.06, 0.06])
+
+        if save_path:
+            fig.savefig(save_path, dpi=300, bbox_inches='tight', facecolor=fig.get_facecolor())
+            logger.info("Saved plot to %s", save_path)
+
         plt.show()
+        return fig, axes

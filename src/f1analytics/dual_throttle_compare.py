@@ -7,6 +7,8 @@ import matplotlib.pyplot as plt
 import matplotlib as mpl
 from matplotlib.collections import LineCollection
 from matplotlib.colors import LinearSegmentedColormap
+from f1analytics.config import logger
+from f1analytics.plot_utils import add_branding
 
 
 @dataclass
@@ -111,7 +113,7 @@ class DualThrottleComparisonVisualizer:
             return LinearSegmentedColormap.from_list('bgr', ['blue', 'green', 'red'])
         return mpl.cm.viridis
 
-    def plot(self, figsize=(14, 10)):
+    def plot(self, figsize=(14, 10), save_path=None):
         # Figure / axes
         fig, ax = plt.subplots(figsize=figsize, facecolor='#222222')
         ax.set_facecolor('#222222')
@@ -258,4 +260,11 @@ class DualThrottleComparisonVisualizer:
                 bbox=dict(boxstyle='round,pad=0.3', facecolor='black', alpha=0.8), zorder=10)
 
         plt.tight_layout()
+        add_branding(fig, text_pos=(0.95, 0.02), logo_pos=[0.88, 0.02, 0.06, 0.06])
+
+        if save_path:
+            fig.savefig(save_path, dpi=300, bbox_inches='tight', facecolor=fig.get_facecolor())
+            logger.info("Saved plot to %s", save_path)
+
         plt.show()
+        return fig, ax
