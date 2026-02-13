@@ -69,10 +69,7 @@ def __getattr__(name: str) -> Any:
         return _load("acceleration").compute_acceleration
     if name == "compute_total_acceleration":
         return _load("acceleration").compute_total_acceleration
-    if name == "compare_corners":
-        return _load("corner_time_comparator").compare_corners
-    if name == "analyze_corners":
-        return _load("corner_analysis").analyze_corners
+
     if name == "timedelta_to_seconds":
         return _load("timedelta_to_seconds").timedelta_to_seconds
 
@@ -83,7 +80,7 @@ def __dir__() -> List[str]:
     base = [
         "__doc__", "__loader__", "__name__", "__package__", "__spec__", "__version__",
         "compute_acceleration", "compute_total_acceleration",
-        "compare_corners", "analyze_corners", "timedelta_to_seconds",
+        "timedelta_to_seconds",
     ]
     return sorted(set(base + _SUBMODULES))
 
@@ -91,7 +88,6 @@ def __dir__() -> List[str]:
 __all__ = sorted(set(_SUBMODULES + [
     "compute_acceleration",
     "compute_total_acceleration",
-    "compare_corners",
-    "analyze_corners",
+
     "timedelta_to_seconds",
 ]))
