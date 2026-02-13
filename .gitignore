@@ -17,3 +17,7 @@ data/
 *.png
 *.jpeg
 *.jpg
+
+# daily data directories
+2026/day_1/
+2026/day_2/
