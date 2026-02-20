@@ -133,7 +133,7 @@ class CornerAnalysis:
         n_extra = (1 if wants_delta else 0) + (1 if include_throttle_scatter else 0)
         total_plots = max(1, n_line + n_extra)
 
-        fig, axs = plt.subplots(total_plots, 1, figsize=(10, 3 * total_plots), sharex=False)
+        fig, axs = plt.subplots(total_plots, 1, figsize=(14, 3.5 * total_plots), sharex=False)
 
         # normalize axs into a list
         if isinstance(axs, np.ndarray):
@@ -149,8 +149,12 @@ class CornerAnalysis:
         else:
             corner_label_str = f"Corners {self._format_corner_label_list(self.corner_list)}"
 
-        title = f"{self.session_name} {self.year} {self.session_type} {corner_label_str}"
-        fig.suptitle(title, color='white')
+        parts = [self.session_name, str(self.year)]
+        if self.session_type:
+            parts.append(self.session_type)
+        parts.append(corner_label_str)
+        title = " — ".join([" ".join(parts[:2 + bool(self.session_type)]), corner_label_str])
+        fig.suptitle(title, color='white', fontsize=14)
         fig.subplots_adjust(top=0.92)
 
         plot_idx = 0
@@ -165,7 +169,7 @@ class CornerAnalysis:
                 ax.plot(dfc['Distance'], dfc[ch], color=col, label=f"{d} {ch}")
             ax.set_ylabel(ch, color='white')
             ax.legend(loc='upper right')
-            ax.grid(True, linestyle='--', linewidth=0.5)
+            ax.grid(True, linestyle='--', linewidth=0.3, alpha=0.5)
             ax.tick_params(colors='white')
             plot_idx += 1
 
@@ -225,8 +229,8 @@ class CornerAnalysis:
             axes_list[-1].set_xlabel('Distance (m)', color='white')
 
         # Signature & logo
-        plt.tight_layout(rect=[0, 0, 0.95, 0.93])
-        add_branding(fig, text_pos=(0.95, 0.91), logo_pos=[0.80, 0.91, 0.08, 0.08])
+        plt.tight_layout(rect=[0, 0, 0.95, 0.94])
+        add_branding(fig, text_pos=(0.99, 0.96), logo_pos=[0.90, 0.92, 0.05, 0.05])
 
         if save_path:
             fig.savefig(save_path, dpi=300, bbox_inches='tight', facecolor=fig.get_facecolor())

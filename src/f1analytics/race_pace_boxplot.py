@@ -45,7 +45,7 @@ class RacePaceBoxplot:
         medians = laps.groupby('Driver')['LapTime_s'].median().sort_values()
         sorted_drivers = medians.index.tolist()
 
-        fig, ax = plt.subplots(figsize=(max(10, len(sorted_drivers) * 0.8), 6))
+        fig, ax = plt.subplots(figsize=(max(14, len(sorted_drivers) * 0.9), 7))
         setup_dark_theme(fig, [ax])
 
         data = [laps[laps['Driver'] == d]['LapTime_s'].dropna().values for d in sorted_drivers]
@@ -57,14 +57,17 @@ class RacePaceBoxplot:
             bp['boxes'][i].set_edgecolor('white')
             bp['medians'][i].set_color('white')
 
-        ax.set_ylabel('Lap Time (s)', color='white')
-        ax.set_title(f'{self.session_name} {self.year} {self.session_type} — Race Pace',
-                      color='white', fontsize=14)
-        ax.grid(axis='y', linestyle='--', linewidth=0.5)
+        ax.set_ylabel('Lap Time (s)', color='white', fontsize=11)
+        parts = [f"{self.session_name} {self.year}"]
+        if self.session_type:
+            parts.append(self.session_type)
+        parts.append("Race Pace")
+        ax.set_title(" — ".join(parts), color='white', fontsize=13)
+        ax.grid(axis='y', linestyle='--', linewidth=0.3, alpha=0.5)
         ax.tick_params(colors='white')
 
-        plt.tight_layout(rect=[0, 0, 0.95, 0.93])
-        add_branding(fig, text_pos=(0.95, 0.91), logo_pos=[0.80, 0.91, 0.08, 0.08])
+        plt.tight_layout()
+        add_branding(fig, text_pos=(0.99, 0.96), logo_pos=[0.90, 0.92, 0.05, 0.05])
 
         if save_path:
             fig.savefig(save_path, dpi=300, bbox_inches='tight', facecolor=fig.get_facecolor())

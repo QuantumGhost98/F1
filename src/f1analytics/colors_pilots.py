@@ -1,45 +1,45 @@
 colors_pilots = {
     # Red Bull Racing
-    "VER": "blue",  # Max Verstappen
-    "TSU": "blue",  # Yuki Tsunoda
-
-    # McLaren
-    "NOR": "orange",  # Lando Norris
-    "PIA": "orange",  # Oscar Piastri
-    "DUN": "orange",  # Alex Dunne
+    "VER": "blue",      # Max Verstappen
+    "HAD": "blue",      # Isack Hadjar
 
     # Ferrari
-    "LEC": "red",    # Charles Leclerc§
-    "HAM": "red",    # Lewis Hamilton
-    "BEG": "red",    # Dino Beganovic
+    "LEC": "red",       # Charles Leclerc
+    "HAM": "red",       # Lewis Hamilton
 
     # Mercedes
-    "RUS": "grey",   # George Russell
-    "ANT": "grey",   # Andrea Kimi Antonelli
+    "RUS": "grey",      # George Russell
+    "ANT": "grey",      # Andrea Kimi Antonelli
+
+    # McLaren
+    "NOR": "orange",    # Lando Norris
+    "PIA": "orange",    # Oscar Piastri
 
     # Aston Martin
-    "ALO": "green",  # Fernando Alonso
-    "STR": "green",  # Lance Stroll
+    "ALO": "green",     # Fernando Alonso
+    "STR": "green",     # Lance Stroll
 
     # Alpine
-    "GAS": "pink",   # Pierre Gasly
-    "DOO": "pink",   # Jack Doohan
-    "COL": "pink",   # Franco Colapinto
-
-    # Haas
-    "OCO": "olive",  # Esteban Ocon
-    "BEA": "olive",  # Oliver Bearman
-    "HIR": "olive",  # Ryō Hirakawa
-
-    # Racing Bulls (formerly AlphaTauri)
-    "HAD": "#9932CC",  # Isack Hadjar
-    "LAW": "#9932CC",  # Liam Lawson
+    "GAS": "pink",      # Pierre Gasly
+    "COL": "pink",      # Franco Colapinto
 
     # Williams
-    "ALB": "navy",   # Alexander Albon
-    "SAI": "navy",   # Carlos Sainz Jr.
+    "SAI": "navy",      # Carlos Sainz Jr.
+    "ALB": "navy",      # Alexander Albon
 
-    # Sauber (transitioning to Audi)
-    "HUL": "lime",   # Nico Hülkenberg
-    "BOR": "lime",   # Gabriel Bortoleto
+    # Racing Bulls
+    "LAW": "#9932CC",   # Liam Lawson
+    "LIN": "#9932CC",   # Arvid Lindblad
+
+    # Haas
+    "OCO": "olive",     # Esteban Ocon
+    "BEA": "olive",     # Oliver Bearman
+
+    # Audi (formerly Sauber)
+    "HUL": "lime",      # Nico Hülkenberg
+    "BOR": "lime",      # Gabriel Bortoleto
+
+    # Cadillac
+    "PER": "#C0C0C0",   # Sergio Pérez
+    "BOT": "#C0C0C0",   # Valtteri Bottas
 }

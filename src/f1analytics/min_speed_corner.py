@@ -80,25 +80,23 @@ class CornerMinSpeed:
 
     def plot(self, save_path=None):
         """Plot min-speed bar chart. Returns (fig, ax)."""
-        plt.style.use('dark_background')
-
         vals = {d: v for d, v in self.min_speed.items() if v is not None}
         if not vals:
             logger.warning("No valid speed data to plot.")
             return None, None
         sorted_vals = dict(sorted(vals.items(), key=lambda item: item[1]))
 
-        fig, ax = plt.subplots(figsize=(10, 6))
+        fig, ax = plt.subplots(figsize=(14, 7))
+        setup_dark_theme(fig, [ax])
+
         bars = ax.bar(
             sorted_vals.keys(),
             sorted_vals.values(),
-            color=[self.colors[d] for d in sorted_vals.keys()]
+            color=[self.colors[d] for d in sorted_vals.keys()],
+            edgecolor='white', linewidth=0.3
         )
 
-        for spine in ax.spines.values():
-            spine.set_color('white')
-        ax.tick_params(colors='white')
-        ax.set_ylabel("Minimum Speed (km/h)", color='white')
+        ax.set_ylabel("Minimum Speed (km/h)", color='white', fontsize=11)
 
         # Build corner label string
         if len(self.corner_list) == 1:
@@ -111,17 +109,21 @@ class CornerMinSpeed:
             else:
                 clabel = "Corners " + ",".join(corner_label(self.circuit_info, i) for i in sorted_idxs)
 
-        title = f"{self.session_name} {self.year} {self.session_type}\n Minimum Speed — {clabel}"
-        ax.set_title(title, color='white')
+        parts = [f"{self.session_name} {self.year}"]
+        if self.session_type:
+            parts.append(self.session_type)
+        parts.append(f"Minimum Speed — {clabel}")
+        ax.set_title(" — ".join(parts), color='white', fontsize=13)
         ax.set_ylim(0, max(sorted_vals.values()) + 20)
+        ax.grid(axis='y', linestyle='--', linewidth=0.3, alpha=0.5)
 
         for bar in bars:
             height = bar.get_height()
             ax.text(bar.get_x() + bar.get_width() / 2, height + 1,
-                    f"{height:.0f} km/h", ha='center', va='bottom', color='white')
+                    f"{height:.0f} km/h", ha='center', va='bottom', color='white', fontsize=9)
 
         plt.tight_layout()
-        add_branding(fig, text_pos=(0.3, 0.91), logo_pos=[0.80, 0.895, 0.12, 0.12])
+        add_branding(fig, text_pos=(0.99, 0.96), logo_pos=[0.90, 0.92, 0.05, 0.05])
 
         if save_path:
             fig.savefig(save_path, dpi=300, bbox_inches='tight', facecolor=fig.get_facecolor())
@@ -222,14 +224,17 @@ class CornerMetricComparator:
         y_label = f"{mode_label} {self.metric}" + (f" ({unit})" if unit else "")
 
         ax.set_ylabel(y_label, color='white')
-        ax.set_title(f'{self.session_name} {self.year} {self.session_type} — {mode_label} {self.metric} per Corner',
-                      color='white', fontsize=14)
+        parts = [f"{self.session_name} {self.year}"]
+        if self.session_type:
+            parts.append(self.session_type)
+        parts.append(f"{mode_label} {self.metric} per Corner")
+        ax.set_title(" — ".join(parts), color='white', fontsize=13)
         ax.legend(loc='upper right')
-        ax.grid(axis='y', linestyle='--', linewidth=0.5)
+        ax.grid(axis='y', linestyle='--', linewidth=0.3, alpha=0.5)
         ax.tick_params(colors='white')
 
-        plt.tight_layout(rect=[0, 0, 0.95, 0.93])
-        add_branding(fig, text_pos=(0.95, 0.91), logo_pos=[0.80, 0.91, 0.08, 0.08])
+        plt.tight_layout()
+        add_branding(fig, text_pos=(0.99, 0.96), logo_pos=[0.90, 0.92, 0.05, 0.05])
 
         if save_path:
             fig.savefig(save_path, dpi=300, bbox_inches='tight', facecolor=fig.get_facecolor())

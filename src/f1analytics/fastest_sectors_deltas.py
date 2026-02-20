@@ -6,7 +6,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from f1analytics.colors_pilots import colors_pilots
 from f1analytics.config import logger
-from f1analytics.plot_utils import add_branding
+from f1analytics.plot_utils import add_branding, setup_dark_theme
 
 
 class SectorDeltaPlotter:
@@ -87,9 +87,7 @@ class SectorDeltaPlotter:
         s3 = df[['Driver', 'Sector3Time', 'Sector3_Delta']].sort_values('Sector3_Delta')
 
         fig, axes = plt.subplots(1, 3, figsize=figsize, sharey=sharey)
-        fig.set_facecolor('#1e1e1e')
-        for ax in axes:
-            ax.set_facecolor('#1e1e1e')
+        setup_dark_theme(fig, axes)
 
         config = [
             ("Sector 1", s1, 'Sector1Time', 'Sector1_Delta'),
@@ -121,11 +119,14 @@ class SectorDeltaPlotter:
             ax.grid(False)
 
         if suptitle is None:
-            suptitle = f"Delta to Fastest Sector Times — {self.session_name} {self.year} — {self.session_type}"
+            parts = ["Delta to Fastest Sector Times", f"{self.session_name} {self.year}"]
+            if self.session_type:
+                parts.append(self.session_type)
+            suptitle = " — ".join(parts)
         fig.suptitle(suptitle, fontsize=18, y=0.98, ha='center', color='white')
 
         plt.tight_layout(rect=[0, 0.03, 1, 0.93])
-        add_branding(fig, text_pos=(0.9, 0.90), logo_pos=[0.73, 0.895, 0.08, 0.08])
+        add_branding(fig, text_pos=(0.99, 0.96), logo_pos=[0.90, 0.92, 0.05, 0.05])
 
         if save_path:
             fig.savefig(save_path, dpi=300, bbox_inches='tight', facecolor=fig.get_facecolor())

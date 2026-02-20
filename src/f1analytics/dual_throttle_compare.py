@@ -8,7 +8,7 @@ import matplotlib as mpl
 from matplotlib.collections import LineCollection
 from matplotlib.colors import LinearSegmentedColormap
 from f1analytics.config import logger
-from f1analytics.plot_utils import add_branding
+from f1analytics.plot_utils import add_branding, setup_dark_theme
 
 
 @dataclass
@@ -115,8 +115,8 @@ class DualThrottleComparisonVisualizer:
 
     def plot(self, figsize=(14, 10), save_path=None):
         # Figure / axes
-        fig, ax = plt.subplots(figsize=figsize, facecolor='#222222')
-        ax.set_facecolor('#222222')
+        fig, ax = plt.subplots(figsize=figsize)
+        setup_dark_theme(fig, [ax])
         ax.axis('off')
 
         # Rotate coords
@@ -246,10 +246,17 @@ class DualThrottleComparisonVisualizer:
             text.set_color('white')
 
         # Title
-        title = f"THROTTLE COMPARE — {self.reference_driver} vs {self.comparison_driver}"
-        if self.event_name and self.year and self.session_name:
-            title = f"{self.event_name} {self.year} {self.session_name} — {self.reference_driver} vs {self.comparison_driver}"
-        ax.set_title(title, fontsize=18, color='white', pad=25, weight='bold')
+        parts = []
+        if self.event_name:
+            title_loc = f"{self.event_name}"
+            if self.year:
+                title_loc += f" {self.year}"
+            if self.session_name:
+                title_loc += f" {self.session_name}"
+            parts.append(title_loc)
+        parts.append(f"{self.reference_driver} vs {self.comparison_driver}")
+        title = " — ".join(parts)
+        ax.set_title(title, fontsize=16, color='white', pad=25, weight='bold')
 
         # Driver labels at polyline starts
         ax.text(X_ref[0], Y_ref[0], f'  {self.reference_driver}  ',
@@ -260,7 +267,7 @@ class DualThrottleComparisonVisualizer:
                 bbox=dict(boxstyle='round,pad=0.3', facecolor='black', alpha=0.8), zorder=10)
 
         plt.tight_layout()
-        add_branding(fig, text_pos=(0.95, 0.02), logo_pos=[0.88, 0.02, 0.06, 0.06])
+        add_branding(fig, text_pos=(0.99, 0.96), logo_pos=[0.90, 0.92, 0.05, 0.05])
 
         if save_path:
             fig.savefig(save_path, dpi=300, bbox_inches='tight', facecolor=fig.get_facecolor())

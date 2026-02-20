@@ -5,8 +5,7 @@ import matplotlib.colors as mcolors
 import os
 from f1analytics.delta_time_sector_constrained import delta_time
 from f1analytics.interpolate_df import interpolate_dataframe
-from f1analytics.acceleration import compute_acceleration, compute_total_acceleration
-from f1analytics.lateral_acceleration import compute_lateral_acceleration
+from f1analytics.acceleration import compute_acceleration
 from f1analytics.timedelta_to_seconds import timedelta_to_seconds
 import warnings
 from scipy.signal import savgol_filter
@@ -87,7 +86,7 @@ class CrossSessionTelemetry:
         -------
         (fig, axes)
         """
-        default_channels = ['Speed', 'Throttle', 'Brake', 'RPM', 'nGear', 'Total_Acc']
+        default_channels = ['Speed', 'Throttle', 'Brake', 'RPM', 'nGear', 'Long_Acc']
         user_provided_channels = channels is not None
         channels = channels or default_channels
 
@@ -98,12 +97,12 @@ class CrossSessionTelemetry:
         )
         channels = [ch for ch in channels if str(ch).lower() not in delta_aliases]
         effective_channels = channels.copy()
-        if not user_provided_channels and 'Total_Acc' not in effective_channels:
-            effective_channels.append('Total_Acc')
+        if not user_provided_channels and 'Long_Acc' not in effective_channels:
+            effective_channels.append('Long_Acc')
 
         units = {
             'Speed': 'km/h', 'Throttle': '%', 'Brake': '%',
-            'RPM': 'rpm', 'nGear': '', 'DRS': '', 'Total_Acc': 'g',
+            'RPM': 'rpm', 'nGear': '', 'DRS': '', 'Long_Acc': 'g',
         }
 
         # Build driver_specs and load data
@@ -143,9 +142,9 @@ class CrossSessionTelemetry:
 
             session_key = f"{sess_info['name']} {sess_info['year']}"
             fl = self.FastestLap(lap, session_key=session_key)
-            fl.df = compute_total_acceleration(fl.df)
-            if 'Total_Acceleration' in fl.df.columns:
-                fl.df = fl.df.rename(columns={'Total_Acceleration': 'Total_Acc'})
+            fl.df = compute_acceleration(fl.df)
+            if 'Acceleration' in fl.df.columns:
+                fl.df = fl.df.rename(columns={'Acceleration': 'Long_Acc'})
             laps.append(fl)
             lap_objs.append(lap)
 

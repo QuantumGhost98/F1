@@ -49,7 +49,7 @@ def create_session_delta_chart(session1, label1, session2, label2, save_path=Non
     x = np.arange(n)
     colors = ['#2ecc71' if d < 0 else '#e74c3c' for d in deltas['Delta']]
 
-    fig, ax = plt.subplots(figsize=(max(10, n * 0.8), 6))
+    fig, ax = plt.subplots(figsize=(max(14, n * 0.9), 7))
     setup_dark_theme(fig, [ax])
 
     ax.bar(x, deltas['Delta'], color=colors, edgecolor='white', linewidth=0.5)
@@ -57,9 +57,9 @@ def create_session_delta_chart(session1, label1, session2, label2, save_path=Non
     ax.set_xticklabels(deltas['Driver'], color='white')
     ax.axhline(0, color='white', linestyle='--', linewidth=0.8)
 
-    ax.set_ylabel('Δ Time (s)', color='white')
-    ax.set_title(f'{label2} vs {label1} — Lap Time Delta', color='white', fontsize=14)
-    ax.grid(axis='y', linestyle='--', linewidth=0.5)
+    ax.set_ylabel('Δ Time (s)', color='white', fontsize=11)
+    ax.set_title(f'{label2} vs {label1} — Lap Time Delta', color='white', fontsize=13)
+    ax.grid(axis='y', linestyle='--', linewidth=0.3, alpha=0.5)
     ax.tick_params(colors='white')
 
     # Legend for colors
@@ -70,8 +70,8 @@ def create_session_delta_chart(session1, label1, session2, label2, save_path=Non
     ]
     ax.legend(handles=legend_elements, loc='upper left')
 
-    plt.tight_layout(rect=[0, 0, 0.95, 0.93])
-    add_branding(fig, text_pos=(0.95, 0.91), logo_pos=[0.80, 0.91, 0.08, 0.08])
+    plt.tight_layout()
+    add_branding(fig, text_pos=(0.99, 0.96), logo_pos=[0.90, 0.92, 0.05, 0.05])
 
     if save_path:
         fig.savefig(save_path, dpi=300, bbox_inches='tight', facecolor=fig.get_facecolor())

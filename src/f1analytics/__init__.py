@@ -34,7 +34,6 @@ _SUBMODULES: List[str] = [
     "driver_utils",
     "fastest_sectors_deltas",
     "interpolate_df",
-    "lateral_acceleration",
     "min_speed_corner",
     "min_throttle_corner",
     "plot_utils",

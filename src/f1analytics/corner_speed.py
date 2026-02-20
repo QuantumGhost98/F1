@@ -112,15 +112,18 @@ class CornerSpeedComparator:
         ax.set_xticklabels(df['Corner'], color='white')
 
         mode_label = "Min" if self.mode == 'min' else "Max"
-        ax.set_ylabel(f'{mode_label} Speed (km/h)', color='white')
-        ax.set_title(f'{self.session_name} {self.year} {self.session_type} — {mode_label} Corner Speed',
-                      color='white', fontsize=14)
+        ax.set_ylabel(f'{mode_label} Speed (km/h)', color='white', fontsize=11)
+        parts = [f"{self.session_name} {self.year}"]
+        if self.session_type:
+            parts.append(self.session_type)
+        parts.append(f"{mode_label} Corner Speed")
+        ax.set_title(" — ".join(parts), color='white', fontsize=13)
         ax.legend(loc='upper right')
-        ax.grid(axis='y', linestyle='--', linewidth=0.5)
+        ax.grid(axis='y', linestyle='--', linewidth=0.3, alpha=0.5)
         ax.tick_params(colors='white')
 
-        plt.tight_layout(rect=[0, 0, 0.95, 0.93])
-        add_branding(fig, text_pos=(0.95, 0.91), logo_pos=[0.80, 0.91, 0.08, 0.08])
+        plt.tight_layout()
+        add_branding(fig, text_pos=(0.99, 0.96), logo_pos=[0.90, 0.92, 0.05, 0.05])
 
         if save_path:
             fig.savefig(save_path, dpi=300, bbox_inches='tight', facecolor=fig.get_facecolor())

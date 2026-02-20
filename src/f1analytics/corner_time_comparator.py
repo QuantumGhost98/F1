@@ -193,7 +193,7 @@ class CornerTimeComparator:
 
         self.df_corner_times = pd.DataFrame(peak_dict).T  # rows: corners, cols: display names
 
-    def plot_corner_time_deltas(self, baseline='per_corner_fastest', figsize=(12, 6), save_path=None):
+    def plot_corner_time_deltas(self, baseline='per_corner_fastest', figsize=(16, 7), save_path=None):
         """
         Plot grouped bar chart of corner time deltas. Returns (fig, ax).
 
@@ -217,62 +217,57 @@ class CornerTimeComparator:
         colors = [self.driver_color_map.get(col, 'white') for col in df_delta.columns]
 
         fig, ax = plt.subplots(figsize=figsize)
-        # Apply dark theme using helper
         setup_dark_theme(fig, [ax])
 
-        df_delta.plot.bar(ax=ax, rot=0, color=colors)
+        df_delta.plot.bar(ax=ax, rot=0, color=colors, edgecolor='white', linewidth=0.3)
 
+        # Build title with lap times as subtitle
         event = getattr(self.session.event, 'EventName', str(self.session.event)) if hasattr(self.session, 'event') else self.session_name
         ref_caption = (
             "fastest per corner" if baseline == 'per_corner_fastest' else f"vs {baseline[1]} (fixed)"
         )
-        ax.set_xlabel("Turn", color='white')
-        ax.set_ylabel("Time Lost (s)", color='white')
-        ax.set_title(f"Corner Time Deltas — {event} {self.year} {self.session_type} — {ref_caption}", color='white')
-        ax.axhline(0, linewidth=1, color='white')
-        legend = ax.legend(title="Driver/Lap", loc='upper left', bbox_to_anchor=(1.02, 0.9), fontsize=8)
-        plt.setp(legend.get_title(), color='white')
-        for text in legend.get_texts():
-            text.set_color('white')
+        title_parts = [f"{event} {self.year}"]
+        if self.session_type:
+            title_parts.append(self.session_type)
+        title_parts.append(ref_caption)
 
-        # Annotate winners & diffs
-        for i, corner in enumerate(df_delta.index):
-            times = self.df_corner_times.loc[corner]
-            winner = times.idxmin()
-            win_t = times[winner]
-            lines = [f"{winner}: {win_t:.3f}s"]
-            for disp in df_delta.columns:
-                if disp == winner:
-                    continue
-                diff = times[disp] - win_t
-                lines.append(f"{disp}: {diff:+.3f}s")
-            
-            # Position text above largest bar for this corner
-            max_y = max(0.02, df_delta.loc[corner].max())
-            ax.text(i, max_y + 0.02, "\n".join(lines),
-                    ha='center', va='bottom', color='white', fontsize=6)
-
-        # Lap time info box
-        lap_info_lines = []
+        # Lap times subtitle
+        lap_strs = []
         for lap_obj, spec in zip(self.lap_objs, self.driver_specs):
             lt = lap_obj["LapTime"]
             seconds = lt.total_seconds() if hasattr(lt, "total_seconds") else float(lt)
             m = int(seconds // 60)
             s = seconds - 60 * m
-            lap_info_lines.append(f"{spec['display_name']}: {m}:{s:06.3f}")
+            lap_strs.append(f"{spec['display_name']}: {m}:{s:06.3f}")
 
-        ax.text(
-            1.02, 1.0,
-            "\n".join(lap_info_lines),
-            transform=ax.transAxes,
-            ha="left", va="top",
-            fontsize=10,
-            color="white",
-            bbox=dict(boxstyle="round", facecolor="#1e1e1e", alpha=0.8, edgecolor="white"),
+        ax.set_title(
+            "Corner Time Deltas — " + " — ".join(title_parts) + "\n" + "  |  ".join(lap_strs),
+            color='white', fontsize=13, pad=15
         )
+        ax.set_xlabel("Turn", color='white', fontsize=11)
+        ax.set_ylabel("Time Lost (s)", color='white', fontsize=11)
+        ax.axhline(0, linewidth=1, color='white', alpha=0.5)
 
-        plt.tight_layout(rect=[0, 0, 0.85, 1])
-        add_branding(fig, text_pos=(0.85, 0.02), logo_pos=[0.75, 0.5, 0.1, 0.1])
+        # Legend inside the plot
+        legend = ax.legend(loc='upper right', fontsize=10, framealpha=0.7)
+        legend.get_frame().set_facecolor('#1e1e1e')
+        legend.get_frame().set_edgecolor('white')
+        plt.setp(legend.get_title(), color='white')
+        for text in legend.get_texts():
+            text.set_color('white')
+
+        # Annotate the delta above each group of bars
+        for i, corner in enumerate(df_delta.index):
+            deltas = df_delta.loc[corner]
+            max_delta = deltas.max()
+            if max_delta > 0:
+                ax.text(i, max_delta + 0.005, f"+{max_delta:.3f}s",
+                        ha='center', va='bottom', color='white', fontsize=7, fontweight='bold')
+
+        ax.grid(axis='y', linestyle='--', linewidth=0.3, alpha=0.5)
+
+        plt.tight_layout()
+        add_branding(fig, text_pos=(0.99, 0.96), logo_pos=[0.90, 0.92, 0.05, 0.05])
 
         if save_path:
             fig.savefig(save_path, dpi=300, bbox_inches='tight', facecolor=fig.get_facecolor())

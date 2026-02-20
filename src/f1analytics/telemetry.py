@@ -5,8 +5,7 @@ import matplotlib.colors as mcolors
 import os
 from f1analytics.delta_time_sector_constrained import delta_time
 from f1analytics.interpolate_df import interpolate_dataframe
-from f1analytics.acceleration import compute_acceleration, compute_total_acceleration
-from f1analytics.lateral_acceleration import compute_lateral_acceleration
+from f1analytics.acceleration import compute_acceleration
 from f1analytics.timedelta_to_seconds import timedelta_to_seconds
 import warnings
 from scipy.signal import savgol_filter
@@ -108,7 +107,7 @@ class Telemetry:
         lap_selections = [spec['lap'] for spec in driver_specs]
         display_names = [spec['display_name'] for spec in driver_specs]
 
-        default_channels = ['Speed', 'Throttle', 'Brake', 'RPM', 'nGear', 'Total_Acc']
+        default_channels = ['Speed', 'Throttle', 'Brake', 'RPM', 'nGear', 'Long_Acc']
         user_provided_channels = channels is not None
         channels = channels or default_channels
 
@@ -119,8 +118,8 @@ class Telemetry:
         )
         channels = [ch for ch in channels if str(ch).lower() not in delta_aliases]
         effective_channels = channels.copy()
-        if not user_provided_channels and 'Total_Acc' not in effective_channels:
-            effective_channels.append('Total_Acc')
+        if not user_provided_channels and 'Long_Acc' not in effective_channels:
+            effective_channels.append('Long_Acc')
 
         units = {
             'Speed': 'km/h',
@@ -129,7 +128,7 @@ class Telemetry:
             'RPM': 'rpm',
             'nGear': '',
             'DRS': '',
-            'Total_Acc': 'g',
+            'Long_Acc': 'g',
         }
 
         # Load data
@@ -145,11 +144,10 @@ class Telemetry:
                     raise ValueError(f"Invalid lap selection for {driver}: {lap_id}") from e
 
             fl = self.FastestLap(lap)
-            # Compute total acceleration (vector magnitude)
-            fl.df = compute_total_acceleration(fl.df)
-            # Rename 'Total_Acceleration' column to 'Total_Acc' for plotting compatibility
-            if 'Total_Acceleration' in fl.df.columns:
-                fl.df = fl.df.rename(columns={'Total_Acceleration': 'Total_Acc'})
+            # Compute longitudinal acceleration
+            fl.df = compute_acceleration(fl.df)
+            if 'Acceleration' in fl.df.columns:
+                fl.df = fl.df.rename(columns={'Acceleration': 'Long_Acc'})
             laps.append(fl)
             lap_objs.append(lap)
 
@@ -190,7 +188,7 @@ class Telemetry:
             unit = units.get(ch, '')
             ax.set_ylabel(f"{ch} ({unit})" if unit else ch, color='white')
             ax.legend(loc='upper right')
-            ax.grid(True, linestyle='--', linewidth=0.5)
+            ax.grid(True, linestyle='--', linewidth=0.3, alpha=0.5)
             ax.tick_params(colors='white')
             ax.axvline(s1_dist, color='white', linestyle='--')
             ax.axvline(s2_dist, color='white', linestyle='--')
@@ -257,9 +255,9 @@ class Telemetry:
 
         title = (f"{self.session.event['EventName']} {self.session.event.year} {session_label}"
                 if session_label else f"{self.session.event['EventName']} {self.session.event.year}")
-        fig.suptitle(title, color='white')
+        fig.suptitle(title, color='white', fontsize=14)
         fig.subplots_adjust(top=0.92)
-        plt.tight_layout(rect=[0, 0, 0.90, 0.94])
+        plt.tight_layout(rect=[0, 0, 0.95, 0.94])
         # Add white contour around each subplot
         for ax in axes:
             pos = ax.get_position()
@@ -268,11 +266,12 @@ class Telemetry:
                 transform=fig.transFigure,
                 facecolor='none',
                 edgecolor='white',
-                linewidth=1.2
+                linewidth=0.8,
+                alpha=0.6
             )
             fig.patches.append(rect)
 
-        add_branding(fig, text_pos=(0.9, 0.96), logo_pos=[0.80, 0.90, 0.06, 0.06])
+        add_branding(fig, text_pos=(0.99, 0.96), logo_pos=[0.90, 0.92, 0.05, 0.05])
 
         if save_path:
             fig.savefig(save_path, dpi=300, bbox_inches='tight', facecolor=fig.get_facecolor())
