@@ -128,16 +128,79 @@ class MinisectorComparator:
     # ── Segment computation ───────────────────────────────────────────────
 
     def _compute_segments(self):
-        """Divide the lap into N equal-distance segments and compute times."""
+        """Divide the lap into N segments aligned with official sector boundaries.
+
+        The 3 official sector boundaries are always minisector boundaries.
+        The n_sectors minisectors are distributed proportionally across the
+        3 sectors (proportional to sector distance length).
+        """
         # Use the first driver's fine grid for reference distance
         ref_disp = self.display_names[0]
         ref_fine = self.telemetry[f'{ref_disp}_fine']
-        max_dist = ref_fine['Distance'].max()
+        ref_dist = ref_fine['Distance'].values
+        ref_t = ref_fine['t_sec'].values
+        max_dist = ref_dist.max()
 
-        # Create N+1 edges
-        self.segment_edges = np.linspace(0, max_dist, self.n_sectors + 1)
+        # ── Determine sector boundary distances from the reference lap ──
+        ref_lap = self.lap_objs[ref_disp]
+        s1t = ref_lap.get('Sector1Time', None)
+        s2t = ref_lap.get('Sector2Time', None)
 
-        # Compute elapsed time per segment per driver using the fine grid
+        sector_dists = [0.0]  # always start at 0
+        if s1t is not None and s2t is not None:
+            s1_sec = s1t.total_seconds() if hasattr(s1t, 'total_seconds') else float(s1t)
+            s2_sec = s2t.total_seconds() if hasattr(s2t, 'total_seconds') else float(s2t)
+            # Sector 1 ends at cumulative s1_sec, Sector 2 ends at s1_sec + s2_sec
+            s1_end_t = s1_sec
+            s2_end_t = s1_sec + s2_sec
+            s1_end_d = float(np.interp(s1_end_t, ref_t, ref_dist))
+            s2_end_d = float(np.interp(s2_end_t, ref_t, ref_dist))
+            sector_dists.extend([s1_end_d, s2_end_d])
+        else:
+            # Fallback: split evenly into 3 if sector times unavailable
+            sector_dists.extend([max_dist / 3, 2 * max_dist / 3])
+            logger.warning("Sector times unavailable – falling back to equal thirds.")
+
+        sector_dists.append(max_dist)
+        self.sector_boundary_distances = np.array(sector_dists)  # [0, s1, s2, max]
+
+        # ── Distribute n_sectors proportionally across the 3 sectors ──
+        sector_lengths = np.diff(self.sector_boundary_distances)  # 3 values
+        total_len = sector_lengths.sum()
+        # Raw fractional allocation
+        raw_alloc = (sector_lengths / total_len) * self.n_sectors
+        # Integer allocation with rounding, ensuring the total is n_sectors
+        alloc = np.round(raw_alloc).astype(int)
+        # Adjust rounding error on the longest sector
+        diff = self.n_sectors - alloc.sum()
+        alloc[np.argmax(sector_lengths)] += diff
+        alloc = np.maximum(alloc, 1)  # every sector gets at least 1 minisector
+
+        # Build edges: per-sector linspace concatenated
+        edges = np.array([self.sector_boundary_distances[0]])
+        # Track which edge indices are sector boundaries (for label skip)
+        sector_boundary_edge_indices = []
+        for s_idx in range(3):
+            s_start = self.sector_boundary_distances[s_idx]
+            s_end = self.sector_boundary_distances[s_idx + 1]
+            # alloc[s_idx] sub-segments inside this sector
+            sub_edges = np.linspace(s_start, s_end, alloc[s_idx] + 1)[1:]
+            edges = np.concatenate([edges, sub_edges])
+            # The last edge just added is what marks the sector boundary
+            if s_idx < 2:  # skip the final boundary (= track end)
+                sector_boundary_edge_indices.append(len(edges) - 1)
+
+        self.segment_edges = edges
+        self.sector_boundary_edge_indices = set(sector_boundary_edge_indices)
+        actual_n = len(edges) - 1
+        if actual_n != self.n_sectors:
+            logger.warning(
+                "Sector-aligned allocation produced %d minisectors (requested %d).",
+                actual_n, self.n_sectors,
+            )
+            self.n_sectors = actual_n
+
+        # ── Compute elapsed time per segment per driver ──
         times = {}
         for disp in self.display_names:
             fine = self.telemetry[f'{disp}_fine']
@@ -188,9 +251,16 @@ class MinisectorComparator:
 
     # ── Track map visualization ───────────────────────────────────────────
 
-    def plot_track_map(self, figsize=(14, 10), save_path=None):
+    def plot_track_map(self, figsize=(14, 10), save_path=None, show_sectors=True):
         """
         Plot the circuit map colored by the fastest driver per segment.
+
+        Parameters
+        ----------
+        show_sectors : bool, default True
+            If True, draw numbered markers at each minisector boundary
+            so the sectors are identifiable on the map.
+
         Returns (fig, ax).
         """
         # Use reference driver's X/Y coordinates
@@ -256,8 +326,8 @@ class MinisectorComparator:
         ax.set_ylim(xy_rot[:, 1].min() - margin, xy_rot[:, 1].max() + margin)
         ax.set_aspect('equal', adjustable='box')
 
-        # Corner annotations
-        if self.circuit_info is not None and hasattr(self.circuit_info, 'corners'):
+        # Corner annotations — only shown when minisector labels are off
+        if not show_sectors and self.circuit_info is not None and hasattr(self.circuit_info, 'corners'):
             for _, corner in self.circuit_info.corners.iterrows():
                 base = np.array([corner['X'], corner['Y']], dtype=float)
                 rpt = base.reshape(1, 2).dot(rot_mat)[0]
@@ -269,6 +339,110 @@ class MinisectorComparator:
                            edgecolor='orange', linewidth=1.5, zorder=4)
                 ax.text(rpt[0], rpt[1], label, ha='center', va='center',
                         color='black', fontsize=8, weight='bold', zorder=5)
+
+        # Minisector boundary labels with perpendicular offset to avoid overlap
+        if show_sectors:
+            skip = getattr(self, 'sector_boundary_edge_indices', set())
+
+            # Compute track centroid for outward direction
+            track_center = np.mean(xy_rot, axis=0)
+            # Offset distance scaled to track size
+            span = max(
+                xy_rot[:, 0].max() - xy_rot[:, 0].min(),
+                xy_rot[:, 1].max() - xy_rot[:, 1].min(),
+            )
+            offset_dist = span * 0.030
+            min_label_sep = offset_dist * 1.2  # minimum separation between labels
+
+            # Helper: compute outward perpendicular at a track point
+            def _outward_offset(d_edge, mult=1.0):
+                pt_idx = np.argmin(np.abs(dist - d_edge))
+                # Tangent via a small window for stability
+                lo = max(0, pt_idx - 3)
+                hi = min(len(xy_rot) - 1, pt_idx + 3)
+                tangent = xy_rot[hi] - xy_rot[lo]
+                perp = np.array([-tangent[1], tangent[0]], dtype=float)
+                norm = np.linalg.norm(perp)
+                if norm > 0:
+                    perp /= norm
+                # Point outward (away from track centroid)
+                pt_on_track = xy_rot[pt_idx]
+                if np.dot(perp, pt_on_track - track_center) < 0:
+                    perp = -perp
+                return pt_on_track, perp * offset_dist * mult
+
+            # ── Collect all label entries (minisector + sector boundaries) ──
+            label_entries = []  # list of dicts with info for each label
+            for idx in range(1, self.n_sectors + 1):
+                d_edge = self.segment_edges[min(idx, len(self.segment_edges) - 1)]
+                is_sector_bdy = idx in skip
+                label_entries.append({
+                    'idx': idx, 'd_edge': d_edge,
+                    'is_sector_bdy': is_sector_bdy,
+                })
+
+            # ── Compute positions with collision avoidance ──
+            placed_positions = []  # list of np arrays
+            for entry in label_entries:
+                base_mult = 1.6 if entry['is_sector_bdy'] else 1.0
+                pt_on_track, off = _outward_offset(entry['d_edge'], mult=base_mult)
+                label_pos = pt_on_track + off
+
+                # Repel from already-placed labels
+                for attempt in range(5):
+                    too_close = False
+                    for existing in placed_positions:
+                        sep = np.linalg.norm(label_pos - existing)
+                        if sep < min_label_sep:
+                            too_close = True
+                            break
+                    if not too_close:
+                        break
+                    # Push further outward
+                    base_mult += 0.6
+                    _, off = _outward_offset(entry['d_edge'], mult=base_mult)
+                    label_pos = pt_on_track + off
+
+                placed_positions.append(label_pos)
+                entry['pt_on_track'] = pt_on_track
+                entry['label_pos'] = label_pos
+
+            # ── Draw labels ──
+            for entry in label_entries:
+                pt_on = entry['pt_on_track']
+                lbl_pos = entry['label_pos']
+
+                if entry['is_sector_bdy']:
+                    # Sector boundary: marks end of sector (S1, S2)
+                    sb_num = sorted(skip).index(entry['idx']) + 1
+                    ax.plot(
+                        [pt_on[0], lbl_pos[0]], [pt_on[1], lbl_pos[1]],
+                        color='orange', linewidth=1.2, alpha=0.7, zorder=5,
+                    )
+                    ax.text(
+                        lbl_pos[0], lbl_pos[1], f'S{sb_num}',
+                        ha='center', va='center', color='orange',
+                        fontsize=10, weight='bold', zorder=9,
+                        bbox=dict(
+                            boxstyle='round,pad=0.3', facecolor='#1e1e1e',
+                            edgecolor='orange', linewidth=2, alpha=0.95,
+                        ),
+                    )
+                else:
+                    # Minisector boundary: cyan dot + leader line
+                    ax.plot(
+                        [pt_on[0], lbl_pos[0]], [pt_on[1], lbl_pos[1]],
+                        color='#00e5ff', linewidth=0.5, alpha=0.5, zorder=5,
+                    )
+                    ax.scatter(
+                        lbl_pos[0], lbl_pos[1], color='#00e5ff', s=65,
+                        edgecolor='white', linewidth=0.8, zorder=6,
+                    )
+                    ax.text(
+                        lbl_pos[0], lbl_pos[1], str(entry['idx']),
+                        ha='center', va='center', color='black',
+                        fontsize=5.5, weight='bold', zorder=7,
+                    )
 
         # Legend
         from matplotlib.lines import Line2D
@@ -389,6 +563,16 @@ class MinisectorComparator:
                 )
 
         ax.grid(axis='y', linestyle='--', linewidth=0.3, alpha=0.5)
+
+        # Sector boundary dividers
+        skip = getattr(self, 'sector_boundary_edge_indices', set())
+        for sb_idx in skip:
+            if 0 < sb_idx < self.n_sectors:
+                x_pos = sb_idx + bar_w * (n_drivers - 1) / 2 - 0.5
+                ax.axvline(
+                    x_pos, color='orange', linewidth=1.5,
+                    linestyle='--', alpha=0.8, zorder=3,
+                )
 
         plt.tight_layout()
         add_branding(fig, text_pos=(0.99, 0.96), logo_pos=[0.90, 0.92, 0.05, 0.05])
