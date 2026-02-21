@@ -17,32 +17,40 @@ class CornerSpeedComparator:
     Compare peak (minimum or maximum) corner speeds across 1-3 drivers/laps.
     """
 
-    def __init__(self, session, session_name, year, session_type, drivers, mode='min'):
+    def __init__(self, session_name, year, session_type,
+                 session=None, drivers=None, laps=None, mode='min'):
         """
         Parameters
         ----------
-        session   : loaded FastF1 session
         session_name : e.g. "Hungary Grand Prix"
         year      : e.g. 2025
         session_type : e.g. "Q" or "R"
+        session   : loaded FastF1 session (single-session mode)
         drivers   : flexible format accepted by normalize_driver_specs
+        laps      : cross-session list of (session, driver, lap_sel, label)
         mode      : 'min' (apex speed) or 'max' (peak speed)
         """
-        self.session = session
         self.session_name = session_name
         self.year = year
         self.session_type = session_type
         self.mode = mode
-        self.circuit_info = session.get_circuit_info() if hasattr(session, "get_circuit_info") else None
 
-        self.laps = session.laps
-        self.transformed_laps = self.laps.copy()
-        self.transformed_laps.loc[:, "LapTime (s)"] = self.laps["LapTime"].dt.total_seconds()
-
-        self.driver_specs = normalize_driver_specs(drivers, max_specs=3)
+        self.driver_specs = normalize_driver_specs(drivers=drivers, laps=laps, max_specs=3)
         self.drivers = [s['driver'] for s in self.driver_specs]
         self.display_names = [s['display_name'] for s in self.driver_specs]
         self.palette = assign_colors_simple(self.drivers)
+
+        # Determine session: explicit or from first spec
+        self.session = session
+        first_spec_session = self.driver_specs[0].get('session')
+        if self.session is None and first_spec_session is not None:
+            self.session = first_spec_session
+
+        self.circuit_info = (
+            self.session.get_circuit_info()
+            if self.session and hasattr(self.session, "get_circuit_info")
+            else None
+        )
 
         self.telemetry = {}
         self.lap_objs = {}
@@ -53,12 +61,15 @@ class CornerSpeedComparator:
             d = spec['driver']
             lap_id = spec['lap']
             disp = spec['display_name']
+            sess = spec.get('session') or self.session
+
+            drv_laps = sess.laps.pick_drivers(d)
             if lap_id == 'fastest':
-                lap = self.transformed_laps.pick_drivers(d).pick_fastest()
+                lap = drv_laps.pick_fastest()
             else:
                 try:
                     lap_num = int(lap_id)
-                    lap = self.transformed_laps.pick_drivers(d).pick_laps(lap_num).iloc[0]
+                    lap = drv_laps.pick_laps(lap_num).iloc[0]
                 except Exception as e:
                     raise ValueError(f"Invalid lap selection for {d}: {lap_id}") from e
 

@@ -49,31 +49,46 @@ class CornerTimeComparator:
     """
     Analyze time deltas across corners between 2-4 drivers/laps.
 
-    Usage:
+    Single-session usage:
         cmp = CornerTimeComparator(
-            drivers={'LEC': 'fastest', 'VER': 'fastest'},
             session=session,
+            drivers={'LEC': 'fastest', 'VER': 'fastest'},
             session_name="Pre-Season Testing",
             year=2026,
             session_type="",
         )
-        cmp.plot_corner_time_deltas()
-        cmp.get_table()
-        cmp.validate()
+
+    Cross-session usage:
+        cmp = CornerTimeComparator(
+            laps=[
+                (session_day5, 'LEC', 'fastest', 'Day 5'),
+                (session_day6, 'LEC', 'fastest', 'Day 6'),
+            ],
+            session_name="Pre-Season Testing",
+            year=2026,
+            session_type="",
+        )
     """
 
-    def __init__(self, drivers, session, session_name: str, year: int,
-                 session_type: str, n_interp=200):
-        self.driver_specs = normalize_driver_specs(drivers, max_specs=4)
+    def __init__(self, session_name: str, year: int, session_type: str,
+                 session=None, drivers=None, laps=None, n_interp=200):
+        self.driver_specs = normalize_driver_specs(drivers=drivers, laps=laps, max_specs=4)
         self.display_names = [s['display_name'] for s in self.driver_specs]
         self.n_interp = int(n_interp)
-        self.session = session
         self.session_name = session_name
         self.year = year
         self.session_type = session_type
-        self.laps = session.laps
+
+        # Determine session: explicit or from first spec
+        self.session = session
+        first_spec_session = self.driver_specs[0].get('session')
+        if self.session is None and first_spec_session is not None:
+            self.session = first_spec_session
+
         self.circuit_info = (
-            session.get_circuit_info() if hasattr(session, "get_circuit_info") else None
+            self.session.get_circuit_info()
+            if self.session and hasattr(self.session, "get_circuit_info")
+            else None
         )
 
         # Colors — use shared utility
@@ -96,9 +111,9 @@ class CornerTimeComparator:
 
         for spec in self.driver_specs:
             drv, lap_sel, disp = spec['driver'], spec['lap'], spec['display_name']
-            lap_obj = self._pick_lap(drv, lap_sel)
+            lap_obj = self._pick_lap(spec)
 
-            # Use get_telemetry() for higher resolution (same as delta_time_sector_constrained)
+            # Use get_telemetry() for higher resolution
             raw_tel = lap_obj.get_telemetry()
             df = _build_fine_grid(raw_tel)
 
@@ -108,13 +123,17 @@ class CornerTimeComparator:
 
         self._max_distance = float(np.nanmax(max_dists)) if max_dists else np.nan
 
-    def _pick_lap(self, drv, lap_sel):
-        """Pick a lap object by driver and selection ('fastest' or lap number)."""
-        laps = self.laps.pick_drivers(drv)
+    def _pick_lap(self, spec):
+        """Pick a lap object — uses per-spec session if available, else self.session."""
+        sess = spec.get('session') or self.session
+        drv = spec['driver']
+        lap_sel = spec['lap']
+
+        drv_laps = sess.laps.pick_drivers(drv)
         if lap_sel == 'fastest':
-            return laps.pick_fastest()
+            return drv_laps.pick_fastest()
         lap_num = int(lap_sel)
-        picked = laps.pick_laps(lap_num)
+        picked = drv_laps.pick_laps(lap_num)
         if len(picked) == 0:
             raise ValueError(f"No lap {lap_num} found for {drv}")
         return picked.iloc[0]
@@ -277,7 +296,9 @@ class CornerTimeComparator:
         df_delta.plot.bar(ax=ax, rot=0, color=colors, edgecolor='white', linewidth=0.3)
 
         # Title with lap times subtitle
-        event = self.session.event.EventName
+        event = self.session_name
+        if self.session and hasattr(self.session, 'event'):
+            event = getattr(self.session.event, 'EventName', self.session_name)
         ref_caption = (
             "fastest per corner" if baseline == 'per_corner_fastest'
             else f"vs {baseline[1]} (fixed)"

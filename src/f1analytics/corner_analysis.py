@@ -26,29 +26,34 @@ class CornerAnalysis:
     corner_idxs now also supports ranges like "3-5" and nested lists/tuples like [3,4] or (7, 9) which are expanded inclusively.
     """
 
-    def __init__(self, session, session_name: str, year: int, session_type: str, drivers, corner_idxs, before=50, after=50):
-        if not isinstance(drivers, dict):
-            raise ValueError("drivers must be a dict of form {'LEC': 'fastest' or lap_number_str}")
-
-        if not (1 <= len(drivers) <= 4):
-            raise ValueError("drivers dict must contain between 1 and 4 entries")
-        self.session = session
+    def __init__(self, session_name: str, year: int, session_type: str,
+                 session=None, drivers=None, laps=None,
+                 corner_idxs=None, before=50, after=50):
         self.session_name = session_name
         self.year = year
         self.session_type = session_type
-        self.driver_lap_map = drivers
-        self.drivers = list(drivers.keys())
         self.before = before
         self.after = after
-        self.circuit_info = session.get_circuit_info() if hasattr(session, "get_circuit_info") else None
-        self.laps = session.laps
-        # Transform the laps in total seconds
-        self.transformed_laps = self.laps.copy()
-        self.transformed_laps.loc[:, "LapTime (s)"] = self.laps["LapTime"].dt.total_seconds()
+
+        # Normalize drivers
+        self.driver_specs = normalize_driver_specs(drivers=drivers, laps=laps, max_specs=4)
+        self.display_names = [s['display_name'] for s in self.driver_specs]
+        self.drivers = [s['driver'] for s in self.driver_specs]
+
+        # Determine session: explicit or from first spec
+        self.session = session
+        first_spec_session = self.driver_specs[0].get('session')
+        if self.session is None and first_spec_session is not None:
+            self.session = first_spec_session
+
+        self.circuit_info = (
+            self.session.get_circuit_info()
+            if self.session and hasattr(self.session, "get_circuit_info")
+            else None
+        )
 
         # Resolve corners using the shared utility
         self.corner_list = resolve_corner_idxs(self.circuit_info, corner_idxs)
-
         self.start_idx = min(self.corner_list)
         self.end_idx = max(self.corner_list)
 
@@ -74,21 +79,27 @@ class CornerAnalysis:
         return format_corner_label_list(self.circuit_info, idx_list)
 
     def _load_data(self):
-        """Load and interpolate telemetry for each driver based on lap selection, storing both lap and telemetry."""
-        for d, lap_id in self.driver_lap_map.items():
+        """Load and interpolate telemetry for each driver based on lap selection."""
+        for spec in self.driver_specs:
+            d = spec['driver']
+            lap_id = spec['lap']
+            disp = spec['display_name']
+            sess = spec.get('session') or self.session
+
+            drv_laps = sess.laps.pick_drivers(d)
             if lap_id == 'fastest':
-                lap = self.transformed_laps.pick_drivers(d).pick_fastest()
+                lap = drv_laps.pick_fastest()
             else:
                 try:
                     lap_num = int(lap_id)
-                    lap = self.transformed_laps.pick_drivers(d).pick_laps(lap_num).iloc[0]
+                    lap = drv_laps.pick_laps(lap_num).iloc[0]
                 except Exception as e:
                     raise ValueError(f"Invalid lap selection for {d}: {lap_id}") from e
 
             df = lap.get_car_data().add_distance()
             df = interpolate_dataframe(df)
-            self.telemetry[d] = df
-            self.lap_objs[d] = lap
+            self.telemetry[disp] = df
+            self.lap_objs[disp] = lap
 
     def _assign_colors(self):
         return assign_colors_simple(self.drivers)
@@ -124,7 +135,7 @@ class CornerAnalysis:
         channels = [ch for ch in channels if str(ch).lower() not in delta_aliases]
 
         # Only show delta if there are 2+ drivers
-        wants_delta = (len(self.drivers) > 1) and (wants_delta_token or not user_provided_channels)
+        wants_delta = (len(self.display_names) > 1) and (wants_delta_token or not user_provided_channels)
 
         # Do we also want the throttle scatter alt view?
         include_throttle_scatter = any(str(ch).lower() == 'throttle' for ch in channels)
@@ -162,7 +173,7 @@ class CornerAnalysis:
         # Line plots for requested channels
         for ch in channels:
             ax = axes_list[plot_idx]
-            for d, col in zip(self.drivers, self.palette):
+            for d, col in zip(self.display_names, self.palette):
                 dfc = self.get_corner_df(d)
                 if ch not in dfc.columns:
                     continue
@@ -177,16 +188,16 @@ class CornerAnalysis:
         if wants_delta:
             ax_dt = axes_list[plot_idx]
             # choose baseline as the fastest lap
-            lap_times = [self.lap_objs[d]['LapTime'].total_seconds() for d in self.drivers]
+            lap_times = [self.lap_objs[d]['LapTime'].total_seconds() for d in self.display_names]
             baseline_idx = lap_times.index(min(lap_times))
-            baseline_driver = self.drivers[baseline_idx]
+            baseline_driver = self.display_names[baseline_idx]
             ref_lap = self.lap_objs[baseline_driver]
 
             corners = self.circuit_info.corners['Distance'].values
             start_dist = corners[self.start_idx] - self.before
             end_dist = corners[self.end_idx] + self.after
 
-            for comp_driver, col in zip(self.drivers, self.palette):
+            for comp_driver, col in zip(self.display_names, self.palette):
                 if comp_driver == baseline_driver:
                     continue
                 comp_lap = self.lap_objs[comp_driver]
@@ -203,13 +214,13 @@ class CornerAnalysis:
             plot_idx += 1
         else:
             # if user explicitly asked for delta with only one driver, gently note it
-            if wants_delta_token and len(self.drivers) == 1:
+            if wants_delta_token and len(self.display_names) == 1:
                 logger.info("Delta requested but only one driver provided; skipping Δ plot.")
 
         # Throttle scatter (optional)
         if include_throttle_scatter:
             ax_throttle_alt = axes_list[plot_idx]
-            for d, col in zip(self.drivers, self.palette):
+            for d, col in zip(self.display_names, self.palette):
                 dfc = self.get_corner_df(d)
                 if dfc.empty or 'Distance' not in dfc or 'Throttle' not in dfc:
                     continue

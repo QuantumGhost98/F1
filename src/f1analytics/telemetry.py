@@ -21,23 +21,28 @@ from f1analytics.corner_utils import corner_label as _corner_label_util
 
 
 class Telemetry:
-    def __init__(self, session, session_name: str, year: int, session_type: str):
+    def __init__(self, session_name: str, year: int, session_type: str, session=None):
         """
-        session: loaded FastF1 session object
         session_name: e.g. "Hungary Grand Prix"
         year: e.g. 2025
         session_type: e.g. "Q", "R"
+        session: loaded FastF1 session object (optional for cross-session mode)
         """
         self.session = session
         self.session_name = session_name
         self.year = year
         self.session_type = session_type
-        self.laps = session.laps
-        # Transform the laps in total seconds
-        self.transformed_laps = self.laps.copy()
-        self.transformed_laps.loc[:, "LapTime (s)"] = self.laps["LapTime"].dt.total_seconds()
-        self.weather = session.weather_data
-        self.circuit_info = session.get_circuit_info() if hasattr(session, "get_circuit_info") else None
+        if session is not None:
+            self.laps = session.laps
+            self.transformed_laps = self.laps.copy()
+            self.transformed_laps.loc[:, "LapTime (s)"] = self.laps["LapTime"].dt.total_seconds()
+            self.weather = session.weather_data
+            self.circuit_info = session.get_circuit_info() if hasattr(session, "get_circuit_info") else None
+        else:
+            self.laps = None
+            self.transformed_laps = None
+            self.weather = None
+            self.circuit_info = None
         self.colors_pilots = colors_pilots
 
     class FastestLap:
@@ -81,30 +86,28 @@ class Telemetry:
         )
 
 
-    def compare_laps(self, drivers, channels=None, session_label="", driver_color_map=None, save_path=None):
+    def compare_laps(self, drivers=None, laps=None, channels=None, session_label="",
+                     driver_color_map=None, save_path=None):
         """
-        Compare up to three laps (can be from the same or different drivers).
+        Compare up to three laps (can be from the same or different sessions).
 
         Parameters:
-        - drivers: flexible specification:
+        - drivers: flexible specification (single-session mode):
             * dict like {'LEC': 'fastest', 'VER': 5}
-            * dict where value is list: {'LEC': ['fastest', 4]} to get two LEC laps
             * list of strings: ['VER', 'LEC'] (fastest laps)
-            * list of tuples: [('VER', 12), ('VER', 'fastest')]
-            * mix of above
-        - channels: list of telemetry fields to plot (can include 'Delta', 'Δ', etc.)
+        - laps: cross-session mode:
+            * [(session1, 'LEC', 'fastest', 'Day 5'), (session2, 'LEC', 'fastest', 'Day 6')]
+        - channels: list of telemetry fields to plot
         - session_label: optional label for title
-        - driver_color_map: optional override; keys can be driver codes or display names like "LEC_4"
+        - driver_color_map: optional color override
         - save_path: optional file path to save the figure
 
         Returns:
         - (fig, axes) tuple
         """
         # Normalize into driver_specs using the shared utility
-        driver_specs = normalize_driver_specs(drivers)
+        driver_specs = normalize_driver_specs(drivers=drivers, laps=laps)
 
-        driver_codes = [spec['driver'] for spec in driver_specs]
-        lap_selections = [spec['lap'] for spec in driver_specs]
         display_names = [spec['display_name'] for spec in driver_specs]
 
         default_channels = ['Speed', 'Throttle', 'Brake', 'RPM', 'nGear', 'Long_Acc']
@@ -131,35 +134,52 @@ class Telemetry:
             'Long_Acc': 'g',
         }
 
-        # Load data
-        laps = []
+        # Load data — per-spec session for cross-session support
+        loaded_laps = []
         lap_objs = []
-        for driver, lap_id in zip(driver_codes, lap_selections):
+        first_session = None
+        for spec in driver_specs:
+            sess = spec.get('session') or self.session
+            if first_session is None:
+                first_session = sess
+            driver = spec['driver']
+            lap_id = spec['lap']
+
+            drv_laps = sess.laps.pick_drivers(driver)
             if lap_id == 'fastest':
-                lap = self.transformed_laps.pick_drivers(driver).pick_fastest()
+                lap = drv_laps.pick_fastest()
             else:
                 try:
-                    lap = self.transformed_laps.pick_drivers(driver).pick_laps(int(lap_id)).iloc[0]
+                    lap = drv_laps.pick_laps(int(lap_id)).iloc[0]
                 except Exception as e:
                     raise ValueError(f"Invalid lap selection for {driver}: {lap_id}") from e
 
             fl = self.FastestLap(lap)
-            # Compute longitudinal acceleration
             fl.df = compute_acceleration(fl.df)
             if 'Acceleration' in fl.df.columns:
                 fl.df = fl.df.rename(columns={'Acceleration': 'Long_Acc'})
-            laps.append(fl)
+            loaded_laps.append(fl)
             lap_objs.append(lap)
 
-        avg_air_temp = self.weather['AirTemp'].mean()
-        avg_track_temp = self.weather['TrackTemp'].mean()
+        # Use circuit_info from self or first session
+        circuit_info = self.circuit_info
+        if circuit_info is None and first_session:
+            circuit_info = first_session.get_circuit_info() if hasattr(first_session, 'get_circuit_info') else None
+
+        # Weather — use self.weather or try first session
+        weather = self.weather
+        if weather is None and first_session and hasattr(first_session, 'weather_data'):
+            weather = first_session.weather_data
+
+        avg_air_temp = weather['AirTemp'].mean() if weather is not None else None
+        avg_track_temp = weather['TrackTemp'].mean() if weather is not None else None
 
         lap_times = [lap['LapTime'].total_seconds() for lap in lap_objs]
         baseline_idx = lap_times.index(min(lap_times))
         baseline_name = display_names[baseline_idx]
 
-        s1_dist, s2_dist = laps[baseline_idx].sector_distances
-        corner_df = self.circuit_info.corners.copy().sort_values('Distance')
+        s1_dist, s2_dist = loaded_laps[baseline_idx].sector_distances
+        corner_df = circuit_info.corners.copy().sort_values('Distance') if circuit_info else pd.DataFrame()
 
         # Color assignment via shared utility
         palette = assign_colors(
@@ -178,11 +198,11 @@ class Telemetry:
         plot_idx = 0
         for ch in effective_channels:
             ax = axes[plot_idx]
-            if ch not in laps[baseline_idx].df.columns:
+            if ch not in loaded_laps[baseline_idx].df.columns:
                 ax.set_visible(False)
                 plot_idx += 1
                 continue
-            for lap, col, disp_name in zip(laps, palette, display_names):
+            for lap, col, disp_name in zip(loaded_laps, palette, display_names):
                 ax.plot(lap.df['Distance'], lap.df.get(ch, np.nan),
                         color=col, linestyle='-', label=f"{disp_name} {ch}")
             unit = units.get(ch, '')

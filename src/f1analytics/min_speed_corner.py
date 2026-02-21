@@ -142,54 +142,67 @@ class CornerMetricComparator:
         CornerMetricComparator(session, ..., drivers={'LEC': 'fastest', 'VER': 14}, metric='Speed', mode='min')
     """
 
-    def __init__(self, session, session_name, year, session_type, drivers, metric='Speed', mode='min', margin=50):
-        self.session = session
+    def __init__(self, session_name, year, session_type,
+                 session=None, drivers=None, laps=None,
+                 metric='Speed', mode='min', margin=50):
         self.session_name = session_name
         self.year = year
         self.session_type = session_type
         self.metric = metric
         self.mode = mode
         self.margin = margin
-        self.circuit_info = session.get_circuit_info() if hasattr(session, "get_circuit_info") else None
 
-        self.laps = session.laps
-        self.transformed_laps = self.laps.copy()
-        self.transformed_laps.loc[:, "LapTime (s)"] = self.laps["LapTime"].dt.total_seconds()
-
-        if not isinstance(drivers, dict):
-            raise ValueError("drivers must be a dict like {'LEC': 'fastest', 'VER': 14}")
-        self.driver_map = drivers
-        self.drivers = list(drivers.keys())
+        self.driver_specs = normalize_driver_specs(drivers=drivers, laps=laps, max_specs=4)
+        self.drivers = [s['driver'] for s in self.driver_specs]
+        self.display_names = [s['display_name'] for s in self.driver_specs]
         self.palette = assign_colors_simple(self.drivers)
+
+        # Determine session: explicit or from first spec
+        self.session = session
+        first_spec_session = self.driver_specs[0].get('session')
+        if self.session is None and first_spec_session is not None:
+            self.session = first_spec_session
+
+        self.circuit_info = (
+            self.session.get_circuit_info()
+            if self.session and hasattr(self.session, "get_circuit_info")
+            else None
+        )
 
         self.telemetry = {}
         self._load_laps()
 
     def _load_laps(self):
-        for d, lap_id in self.driver_map.items():
+        for spec in self.driver_specs:
+            d = spec['driver']
+            lap_id = spec['lap']
+            disp = spec['display_name']
+            sess = spec.get('session') or self.session
+
+            drv_laps = sess.laps.pick_drivers(d)
             if lap_id == 'fastest':
-                lap = self.transformed_laps.pick_drivers(d).pick_fastest()
+                lap = drv_laps.pick_fastest()
             else:
                 try:
                     lap_num = int(lap_id)
-                    lap = self.transformed_laps.pick_drivers(d).pick_laps(lap_num).iloc[0]
+                    lap = drv_laps.pick_laps(lap_num).iloc[0]
                 except Exception as e:
                     raise ValueError(f"Invalid lap selection for {d}: {lap_id}") from e
             df = lap.get_car_data().add_distance()
             df = interpolate_dataframe(df)
-            self.telemetry[d] = df
+            self.telemetry[disp] = df
 
     def compute(self):
         """Return DataFrame with one row per corner and one column per driver."""
         corners_df = self.circuit_info.corners
         results = {'Corner': []}
-        for d in self.drivers:
+        for d in self.display_names:
             results[d] = []
 
         for apex_idx in range(len(corners_df)):
             apex_dist = corners_df.iloc[apex_idx]['Distance']
             results['Corner'].append(corner_label(self.circuit_info, apex_idx))
-            for d in self.drivers:
+            for d in self.display_names:
                 df = self.telemetry[d]
                 window = df[(df['Distance'] >= apex_dist - self.margin) & (df['Distance'] <= apex_dist + self.margin)]
                 if window.empty or self.metric not in window.columns:
@@ -205,14 +218,14 @@ class CornerMetricComparator:
         """Plot grouped bar chart of per-corner metrics. Returns (fig, ax)."""
         df = self.compute()
         n_corners = len(df)
-        n_drivers = len(self.drivers)
+        n_drivers = len(self.display_names)
         x = np.arange(n_corners)
         bar_w = 0.8 / n_drivers
 
         fig, ax = plt.subplots(figsize=(max(12, n_corners * 0.8), 6))
         setup_dark_theme(fig, [ax])
 
-        for i, (drv, col) in enumerate(zip(self.drivers, self.palette)):
+        for i, (drv, col) in enumerate(zip(self.display_names, self.palette)):
             ax.bar(x + i * bar_w, df[drv], width=bar_w,
                    label=drv, color=col, edgecolor='white', linewidth=0.5)
 

@@ -35,38 +35,44 @@ class MinisectorComparator:
     """
     Compare lap performance across N equal-distance mini-sectors.
 
-    Usage:
+    Single-session usage:
         ms = MinisectorComparator(
             session=session,
-            session_name="Pre-Season Testing",
-            year=2026,
-            session_type="",
             drivers={'LEC': 'fastest', 'NOR': 'fastest'},
-            n_sectors=25,
+            session_name="Pre-Season Testing", year=2026, session_type="",
         )
-        ms.plot_track_map()
-        ms.plot_bar_chart()
+
+    Cross-session usage:
+        ms = MinisectorComparator(
+            laps=[
+                (session_day5, 'LEC', 'fastest', 'Day 5'),
+                (session_day6, 'LEC', 'fastest', 'Day 6'),
+            ],
+            session_name="Pre-Season Testing", year=2026, session_type="",
+        )
     """
 
-    def __init__(self, session, session_name, year, session_type, drivers,
-                 n_sectors=25):
-        self.session = session
+    def __init__(self, session_name, year, session_type,
+                 session=None, drivers=None, laps=None, n_sectors=25):
         self.session_name = session_name
         self.year = year
         self.session_type = session_type
         self.n_sectors = n_sectors
-        self.circuit_info = (
-            session.get_circuit_info() if hasattr(session, "get_circuit_info") else None
-        )
 
-        self.driver_specs = normalize_driver_specs(drivers, max_specs=4)
+        self.driver_specs = normalize_driver_specs(drivers=drivers, laps=laps, max_specs=4)
         self.display_names = [s['display_name'] for s in self.driver_specs]
         self.palette = assign_colors_simple([s['driver'] for s in self.driver_specs])
 
-        self.laps = session.laps
-        self.transformed_laps = self.laps.copy()
-        self.transformed_laps.loc[:, "LapTime (s)"] = (
-            self.laps["LapTime"].dt.total_seconds()
+        # Determine session: explicit or from first spec
+        self.session = session
+        first_spec_session = self.driver_specs[0].get('session')
+        if self.session is None and first_spec_session is not None:
+            self.session = first_spec_session
+
+        self.circuit_info = (
+            self.session.get_circuit_info()
+            if self.session and hasattr(self.session, "get_circuit_info")
+            else None
         )
 
         # Loaded data
@@ -89,12 +95,14 @@ class MinisectorComparator:
             d = spec['driver']
             lap_sel = spec['lap']
             disp = spec['display_name']
+            sess = spec.get('session') or self.session
 
+            drv_laps = sess.laps.pick_drivers(d)
             if lap_sel == 'fastest':
-                lap = self.transformed_laps.pick_drivers(d).pick_fastest()
+                lap = drv_laps.pick_fastest()
             else:
                 lap_num = int(lap_sel)
-                lap = self.transformed_laps.pick_drivers(d).pick_laps(lap_num).iloc[0]
+                lap = drv_laps.pick_drivers(d).pick_laps(lap_num).iloc[0]
 
             # lap.telemetry for X/Y coordinates (needed for track map)
             tel = lap.telemetry.copy()

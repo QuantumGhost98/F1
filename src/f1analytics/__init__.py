@@ -43,8 +43,6 @@ _SUBMODULES: List[str] = [
     "dual_throttle_compare",
     "model_prediction_race_pace",
     "race_pace_boxplot",
-    "cross_session_telemetry",
-    "session_delta_chart",
     "minisector",
 
 ]

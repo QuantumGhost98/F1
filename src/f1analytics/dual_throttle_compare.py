@@ -33,7 +33,8 @@ class DualThrottleComparisonVisualizer:
         vis.plot()
     """
 
-    def __init__(self, session, reference_driver, comparison_driver,
+    def __init__(self, reference_driver, comparison_driver,
+                 session=None, reference_session=None, comparison_session=None,
                  event_name=None, year=None, session_name=None,
                  offset_distance=200.0, annotate_corners=True,
                  annotate_sectors=False, highlight_brake_zones=False,
@@ -42,24 +43,28 @@ class DualThrottleComparisonVisualizer:
         """
         Parameters
         ----------
-        session             : FastF1 loaded session
         reference_driver    : driver code for inner line, e.g. 'LEC'
         comparison_driver   : driver code for outer line, e.g. 'NOR'
+        session             : FastF1 loaded session (single-session)
+        reference_session   : session for reference driver (cross-session)
+        comparison_session  : session for comparison driver (cross-session)
         event_name          : e.g. "Pre-Season Testing"
         year                : e.g. 2026
         session_name        : e.g. "Day 6"
-        offset_distance     : distance between parallel lines (track coord units)
+        offset_distance     : distance between parallel lines
         annotate_corners    : show corner numbers on the map
         annotate_sectors    : show approximate sector boundary markers
-        highlight_brake_zones: highlight points where throttle < brake_threshold
+        highlight_brake_zones: highlight braking points
         brake_threshold     : throttle (%) below which is considered braking
         line_width          : line width when use_speed_width=False
         use_speed_width     : scale line width by speed
         use_bgr_scale       : True -> Blue→Green→Red, False -> 'viridis'
         """
-        self.session = session
         self.reference_driver = reference_driver
         self.comparison_driver = comparison_driver
+        self.session = session
+        self.ref_session = reference_session or session
+        self.comp_session = comparison_session or session
         self.event_name = event_name
         self.year = year
         self.session_name = session_name
@@ -72,10 +77,13 @@ class DualThrottleComparisonVisualizer:
         self.use_speed_width = use_speed_width
         self.use_bgr_scale = use_bgr_scale
 
+        # Use first available session for circuit info
+        base_session = self.ref_session or self.comp_session
         self.circuit_info = (
-            session.get_circuit_info() if hasattr(session, "get_circuit_info") else None
+            base_session.get_circuit_info()
+            if base_session and hasattr(base_session, "get_circuit_info")
+            else None
         )
-        self.laps = session.laps
 
         # Rotation angle (degrees -> radians)
         self._angle = float(self.circuit_info.rotation) / 180.0 * np.pi
@@ -84,8 +92,8 @@ class DualThrottleComparisonVisualizer:
 
     def _load_laps(self):
         """Load fastest laps and telemetry for both drivers."""
-        self._lap_ref = self.laps.pick_drivers(self.reference_driver).pick_fastest()
-        self._lap_comp = self.laps.pick_drivers(self.comparison_driver).pick_fastest()
+        self._lap_ref = self.ref_session.laps.pick_drivers(self.reference_driver).pick_fastest()
+        self._lap_comp = self.comp_session.laps.pick_drivers(self.comparison_driver).pick_fastest()
 
         tel_ref = self._lap_ref.telemetry
         tel_comp = self._lap_comp.telemetry
