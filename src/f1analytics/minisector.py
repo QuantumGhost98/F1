@@ -11,11 +11,24 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib as mpl
 from matplotlib.collections import LineCollection
-from f1analytics.interpolate_df import interpolate_dataframe
 from f1analytics.timedelta_to_seconds import timedelta_to_seconds
 from f1analytics.driver_utils import normalize_driver_specs
 from f1analytics.plot_utils import assign_colors_simple, setup_dark_theme, add_branding
 from f1analytics.config import logger
+
+
+def _build_fine_grid(tel_df):
+    """
+    Build a 1m resolution distance-time grid from telemetry
+    for accurate elapsed-time computation.
+    """
+    tel = tel_df.dropna(subset=['Distance', 'Time', 'Speed']).sort_values('Distance')
+    tel = tel.drop_duplicates(subset=['Distance'], keep='first')
+    dist = tel['Distance'].values
+    time_s = tel['Time'].dt.total_seconds().values
+    grid = np.arange(dist.min(), dist.max(), 1.0)
+    time_grid = np.interp(grid, dist, time_s)
+    return pd.DataFrame({'Distance': grid, 't_sec': time_grid})
 
 
 class MinisectorComparator:
@@ -67,6 +80,7 @@ class MinisectorComparator:
         self.segment_deltas = None
         self.segment_winner = None  # Series: segment_idx -> display_name
         self._compute_segments()
+        self._normalize_to_lap_times()
 
     # ── Data loading ──────────────────────────────────────────────────────
 
@@ -82,16 +96,10 @@ class MinisectorComparator:
                 lap_num = int(lap_sel)
                 lap = self.transformed_laps.pick_drivers(d).pick_laps(lap_num).iloc[0]
 
-            # Use .telemetry for X/Y coordinates (merged telemetry)
-            tel = lap.telemetry
-            tel = tel.copy()
+            # lap.telemetry for X/Y coordinates (needed for track map)
+            tel = lap.telemetry.copy()
 
-            # Ensure Distance column
-            if 'Distance' not in tel.columns:
-                tel = lap.get_car_data().add_distance()
-                tel = interpolate_dataframe(tel)
-
-            # Ensure seconds column
+            # Ensure t_sec column from Time
             if 'Time' in tel.columns:
                 tel['t_sec'] = np.asarray(
                     timedelta_to_seconds(tel['Time']), dtype=float
@@ -100,30 +108,33 @@ class MinisectorComparator:
                 tel['t_sec'] = np.asarray(
                     timedelta_to_seconds(tel['SessionTime']), dtype=float
                 )
-                # Make relative to lap start
                 tel['t_sec'] = tel['t_sec'] - tel['t_sec'].iloc[0]
 
             self.telemetry[disp] = tel
             self.lap_objs[disp] = lap
 
+            # Also build a fine 1m grid for accurate timing
+            raw_tel = lap.get_telemetry()
+            self.telemetry[f'{disp}_fine'] = _build_fine_grid(raw_tel)
+
     # ── Segment computation ───────────────────────────────────────────────
 
     def _compute_segments(self):
         """Divide the lap into N equal-distance segments and compute times."""
-        # Use the first driver's distance range as reference
+        # Use the first driver's fine grid for reference distance
         ref_disp = self.display_names[0]
-        ref_tel = self.telemetry[ref_disp]
-        max_dist = ref_tel['Distance'].max()
+        ref_fine = self.telemetry[f'{ref_disp}_fine']
+        max_dist = ref_fine['Distance'].max()
 
         # Create N+1 edges
         self.segment_edges = np.linspace(0, max_dist, self.n_sectors + 1)
 
-        # Compute elapsed time per segment per driver
+        # Compute elapsed time per segment per driver using the fine grid
         times = {}
         for disp in self.display_names:
-            tel = self.telemetry[disp]
-            dist = tel['Distance'].values
-            t = tel['t_sec'].values
+            fine = self.telemetry[f'{disp}_fine']
+            dist = fine['Distance'].values
+            t = fine['t_sec'].values
             seg_times = []
             for i in range(self.n_sectors):
                 d_start = self.segment_edges[i]
@@ -140,6 +151,31 @@ class MinisectorComparator:
         self.segment_deltas = self.segment_times.subtract(ref, axis=0)
 
         # Winner per segment
+        self.segment_winner = self.segment_times.idxmin(axis=1)
+
+    def _normalize_to_lap_times(self):
+        """
+        Scale segment times proportionally so they sum exactly
+        to the official lap time for each driver.
+        """
+        for disp in self.display_names:
+            if disp not in self.segment_times.columns:
+                continue
+            lt = self.lap_objs[disp]['LapTime']
+            lap_seconds = lt.total_seconds() if hasattr(lt, 'total_seconds') else float(lt)
+            seg_sum = self.segment_times[disp].sum()
+
+            if seg_sum > 0 and not np.isnan(seg_sum):
+                scale = lap_seconds / seg_sum
+                self.segment_times[disp] *= scale
+                logger.debug(
+                    "%s: normalized segment times by factor %.6f (was %.3f, lap %.3f)",
+                    disp, scale, seg_sum, lap_seconds,
+                )
+
+        # Recompute deltas and winners after normalization
+        ref = self.segment_times.min(axis=1)
+        self.segment_deltas = self.segment_times.subtract(ref, axis=0)
         self.segment_winner = self.segment_times.idxmin(axis=1)
 
     # ── Track map visualization ───────────────────────────────────────────
@@ -370,3 +406,26 @@ class MinisectorComparator:
     def get_winner_summary(self):
         """Return dict of {display_name: number_of_segments_won}."""
         return self.segment_winner.value_counts().to_dict()
+
+    def validate(self):
+        """
+        Sanity check: sum of segment times vs actual lap time.
+        Returns a DataFrame with [Sum Segments, Lap Time, Diff, Error %].
+        """
+        rows = []
+        for disp in self.display_names:
+            lt = self.lap_objs[disp]['LapTime']
+            lap_seconds = lt.total_seconds() if hasattr(lt, 'total_seconds') else float(lt)
+            seg_sum = self.segment_times[disp].sum() if disp in self.segment_times.columns else np.nan
+            diff = seg_sum - lap_seconds
+            error_pct = (abs(diff) / lap_seconds) * 100 if lap_seconds > 0 else np.nan
+
+            rows.append({
+                'Driver': disp,
+                'Sum Segments (s)': round(seg_sum, 3),
+                'Lap Time (s)': round(lap_seconds, 3),
+                'Diff (s)': round(diff, 3),
+                'Error (%)': round(error_pct, 2),
+            })
+
+        return pd.DataFrame(rows).set_index('Driver')

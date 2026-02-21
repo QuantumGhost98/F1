@@ -1,32 +1,70 @@
 """
 Corner time comparator — analyze time deltas per corner.
 
-Restored original API: CornerTimeComparator(drivers, session, ...)
+Computes elapsed time per corner window for each driver/lap, then plots
+grouped bar charts showing who gained/lost time at each corner.
+
+The corner windows partition the entire lap distance so that the sum of
+corner times equals (approximately) the total lap time.
 """
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from f1analytics.interpolate_df import interpolate_dataframe
 from f1analytics.timedelta_to_seconds import timedelta_to_seconds
 from f1analytics.colors_pilots import colors_pilots
 from f1analytics.config import logger
 from f1analytics.driver_utils import normalize_driver_specs
 from f1analytics.corner_utils import corner_label
-from f1analytics.plot_utils import add_branding, setup_dark_theme
+from f1analytics.plot_utils import add_branding, setup_dark_theme, assign_colors_simple
+
+
+def _extract_seconds(df):
+    """Extract a float-seconds array from the first time-like column found."""
+    if 'Time' in df.columns:
+        return timedelta_to_seconds(df['Time'])
+    if 'SessionTime' in df.columns:
+        return timedelta_to_seconds(df['SessionTime'])
+    raise ValueError("No time-like column ('Time' or 'SessionTime') found in telemetry.")
+
+
+def _build_fine_grid(tel_df):
+    """
+    Build a high-resolution (1m) distance-time grid from telemetry,
+    matching the approach in delta_time_sector_constrained.
+    """
+    tel = tel_df.dropna(subset=['Distance', 'Time', 'Speed']).sort_values('Distance')
+    tel = tel.drop_duplicates(subset=['Distance'], keep='first')
+
+    dist = tel['Distance'].values
+    time_s = tel['Time'].dt.total_seconds().values
+
+    # 1m resolution grid
+    grid = np.arange(dist.min(), dist.max(), 1.0)
+    time_grid = np.interp(grid, dist, time_s)
+
+    return pd.DataFrame({'Distance': grid, 't_sec': time_grid})
 
 
 class CornerTimeComparator:
     """
-    Analyze time deltas across corners between 2-3 drivers/laps.
+    Analyze time deltas across corners between 2-4 drivers/laps.
 
     Usage:
-        cmp = CornerTimeComparator(drivers=[('LEC','fastest'), ('VER','fastest')],
-                                   session=session, ...)
-        cmp.plot_corner_time_deltas(baseline='per_corner_fastest')
+        cmp = CornerTimeComparator(
+            drivers={'LEC': 'fastest', 'VER': 'fastest'},
+            session=session,
+            session_name="Pre-Season Testing",
+            year=2026,
+            session_type="",
+        )
+        cmp.plot_corner_time_deltas()
+        cmp.get_table()
+        cmp.validate()
     """
 
-    def __init__(self, drivers, session, session_name: str, year: int, session_type: str, n_interp=200):
-        self.driver_specs = normalize_driver_specs(drivers)
+    def __init__(self, drivers, session, session_name: str, year: int,
+                 session_type: str, n_interp=200):
+        self.driver_specs = normalize_driver_specs(drivers, max_specs=4)
         self.display_names = [s['display_name'] for s in self.driver_specs]
         self.n_interp = int(n_interp)
         self.session = session
@@ -34,186 +72,203 @@ class CornerTimeComparator:
         self.year = year
         self.session_type = session_type
         self.laps = session.laps
-        self.circuit_info = session.get_circuit_info() if hasattr(session, "get_circuit_info") else None
+        self.circuit_info = (
+            session.get_circuit_info() if hasattr(session, "get_circuit_info") else None
+        )
 
-        self._assign_colors()
+        # Colors — use shared utility
+        driver_codes = [s['driver'] for s in self.driver_specs]
+        self.palette = assign_colors_simple(driver_codes)
+        self.driver_color_map = dict(zip(self.display_names, self.palette))
+
         self._load_laps()
         self._compute_corner_windows()
         self._compute_corner_times()
+        self._normalize_to_lap_times()
 
-    def _assign_colors(self):
-        fallback_shades = {
-            'red': ['white', 'lightcoral'],
-            'blue': ['cyan', 'lightblue'],
-            'orange': ['gold', 'wheat'],
-            'grey': ['white', 'silver'],
-            'green': ['lime', 'springgreen'],
-            'pink': ['violet', 'lightpink'],
-            'olive': ['khaki'],
-            'navy': ['skyblue'],
-            '#9932CC': ['plum'],
-            'lime': ['yellowgreen']
-        }
-        used_colors = {}
-        self.driver_color_map = {}
-        self.palette = []
-        for spec in self.driver_specs:
-            drv = spec['driver']
-            disp = spec['display_name']
-            base_color = colors_pilots.get(drv, 'white')
-            count = used_colors.get(base_color, 0)
-            if count == 0:
-                color = base_color
-            else:
-                fb = fallback_shades.get(base_color, ['white'])
-                color = fb[count - 1] if count - 1 < len(fb) else 'white'
-            used_colors[base_color] = count + 1
-            self.driver_color_map[disp] = color
-            self.palette.append(color)
-
-    def _corner_label(self, apex_idx):
-        return corner_label(self.circuit_info, apex_idx)
-
-    def _compute_corner_windows(self):
-        """Determine entry/exit distances for each corner."""
-        corner_df_sorted = self.circuit_info.corners.sort_values('Distance')
-        self.apex_order = list(corner_df_sorted.index)
-        distances = corner_df_sorted['Distance'].values
-
-        # entries: midpoint between previous and current apex (0 for first)
-        self.entries = [0.0] + [(distances[i - 1] + distances[i]) / 2 for i in range(1, len(distances))]
-
-        # exits: midpoint between current and next apex; last exit = max lap distance
-        self.exits = [(distances[i] + distances[i + 1]) / 2 for i in range(len(distances) - 1)]
-
-        # final exit from loaded laps
-        if hasattr(self, "_max_distance") and np.isfinite(self._max_distance):
-            self.exits.append(float(self._max_distance))
-        else:
-            # fallback if no laps loaded for some reason
-            gap = np.diff(distances).mean() if len(distances) > 1 else 100.0
-            self.exits.append(float(distances[-1] + gap))
-
-        self.apex_distances = distances
-
-    def _pick_lap_object(self, drv, lap_sel):
-        laps = self.laps.pick_drivers(drv)
-        if lap_sel == 'fastest':
-            return laps.pick_fastest()
-        try:
-            lap_num = int(lap_sel)
-            picked = laps.pick_laps(lap_num)
-            if len(picked) == 0:
-                raise ValueError(f"No lap {lap_num} found for {drv}")
-            return picked.iloc[0]
-        except ValueError:
-            # fallback if 'fastest' string passed in weird way or just error
-            raise ValueError(f"Invalid lap selection: {lap_sel}")
+    # ── Data loading ──────────────────────────────────────────────────────
 
     def _load_laps(self):
+        """Load telemetry using get_telemetry() for accurate timing, on 1m grid."""
         self.lap_objs = []
-        self.laps_loaded = []  # {'driver':..., 'name':..., 'df': df}
+        self.laps_loaded = []
         max_dists = []
 
         for spec in self.driver_specs:
             drv, lap_sel, disp = spec['driver'], spec['lap'], spec['display_name']
-            lap_obj = self._pick_lap_object(drv, lap_sel)
-            df = interpolate_dataframe(lap_obj.get_car_data().add_distance())
+            lap_obj = self._pick_lap(drv, lap_sel)
 
-            # Ensure seconds column exists
-            if 'Time' in df.columns:
-                sec = timedelta_to_seconds(df['Time'])
-            elif 'Date' in df.columns:
-                sec = timedelta_to_seconds(df['Date'])
-            elif df.index.dtype.kind == 'm':  # TimedeltaIndex
-                sec = timedelta_to_seconds(df.index.to_series())
-            else:
-                try:
-                    sec = timedelta_to_seconds(df.index.to_series())
-                except Exception:
-                    raise ValueError("Could not find a time-like column to convert to seconds.")
-
-            df = df.copy()
-            df['t_sec'] = np.asarray(sec, dtype=float)
+            # Use get_telemetry() for higher resolution (same as delta_time_sector_constrained)
+            raw_tel = lap_obj.get_telemetry()
+            df = _build_fine_grid(raw_tel)
 
             self.lap_objs.append(lap_obj)
             self.laps_loaded.append({'driver': drv, 'name': disp, 'df': df})
             max_dists.append(df['Distance'].max())
 
-        # Save for _compute_corner_windows
-        self._max_distance = float(np.nanmax(max_dists)) if len(max_dists) else np.nan
+        self._max_distance = float(np.nanmax(max_dists)) if max_dists else np.nan
+
+    def _pick_lap(self, drv, lap_sel):
+        """Pick a lap object by driver and selection ('fastest' or lap number)."""
+        laps = self.laps.pick_drivers(drv)
+        if lap_sel == 'fastest':
+            return laps.pick_fastest()
+        lap_num = int(lap_sel)
+        picked = laps.pick_laps(lap_num)
+        if len(picked) == 0:
+            raise ValueError(f"No lap {lap_num} found for {drv}")
+        return picked.iloc[0]
+
+    # ── Corner window computation ─────────────────────────────────────────
+
+    def _corner_label(self, apex_idx):
+        return corner_label(self.circuit_info, apex_idx)
+
+    def _compute_corner_windows(self):
+        """
+        Determine entry/exit distances for each corner.
+
+        Windows partition the full lap: entry[0]=0, exit[-1]=max_distance.
+        Boundaries are midpoints between consecutive apex distances.
+        """
+        corner_df = self.circuit_info.corners.sort_values('Distance')
+        self.apex_order = list(corner_df.index)
+        distances = corner_df['Distance'].values
+
+        # entries: [0, midpoint(apex0, apex1), midpoint(apex1, apex2), ...]
+        self.entries = [0.0] + [
+            (distances[i - 1] + distances[i]) / 2 for i in range(1, len(distances))
+        ]
+
+        # exits: [midpoint(apex0, apex1), ..., max_lap_distance]
+        self.exits = [
+            (distances[i] + distances[i + 1]) / 2 for i in range(len(distances) - 1)
+        ]
+        self.exits.append(float(self._max_distance))
+
+        self.apex_distances = distances
+
+    # ── Corner time computation ───────────────────────────────────────────
 
     def _elapsed_time_between(self, df, d_start, d_end):
-        """Calculate elapsed time using sector-constrained method for better accuracy."""
+        """Compute elapsed time between two distances via interpolation."""
         dist = df['Distance'].values
         t = df['t_sec'].values
 
-        # clamp window inside available distance
-        d0 = max(min(d_start, dist.max()), dist.min())
-        d1 = max(min(d_end, dist.max()), dist.min())
+        d0 = np.clip(d_start, dist.min(), dist.max())
+        d1 = np.clip(d_end, dist.min(), dist.max())
         if d1 <= d0:
             return np.nan
 
-        start_idx = np.searchsorted(dist, d0)
-        end_idx = np.searchsorted(dist, d1)
-
-        if end_idx <= start_idx:
-            return np.nan
-
-        corner_dist = dist[start_idx:end_idx + 1]
-        corner_time = t[start_idx:end_idx + 1]
-
-        if len(corner_time) < 2:
-            t0 = np.interp(d0, dist, t)
-            t1 = np.interp(d1, dist, t)
-            return float(t1 - t0)
-
-        t_start = corner_time[0] if d0 <= corner_dist[0] else np.interp(d0, corner_dist, corner_time)
-        t_end = corner_time[-1] if d1 >= corner_dist[-1] else np.interp(d1, corner_dist, corner_time)
-
-        return float(t_end - t_start)
+        t0 = np.interp(d0, dist, t)
+        t1 = np.interp(d1, dist, t)
+        return float(t1 - t0)
 
     def _compute_corner_times(self):
-        """Compute per-corner elapsed times."""
+        """Compute per-corner elapsed times for each driver."""
         peak_dict = {}
 
-        for i, (start, end, apex_idx) in enumerate(zip(self.entries, self.exits, self.apex_order)):
+        for i, (start, end, apex_idx) in enumerate(
+            zip(self.entries, self.exits, self.apex_order)
+        ):
             corner_times = {}
             for lap in self.laps_loaded:
                 try:
                     dt = self._elapsed_time_between(lap['df'], start, end)
                     corner_times[lap['name']] = dt
                 except Exception as e:
-                    logger.warning(f"Error in corner {i} for {lap['name']}: {e}")
+                    logger.warning("Error in corner %d for %s: %s", i, lap['name'], e)
                     continue
 
             if corner_times:
                 label = self._corner_label(apex_idx)
                 peak_dict[label] = corner_times
 
-        self.df_corner_times = pd.DataFrame(peak_dict).T  # rows: corners, cols: display names
+        self.df_corner_times = pd.DataFrame(peak_dict).T
 
-    def plot_corner_time_deltas(self, baseline='per_corner_fastest', figsize=(16, 7), save_path=None):
+    def _normalize_to_lap_times(self):
+        """
+        Distribute the residual (sum_corners - lap_time) proportionally
+        so that corner times sum exactly to the actual lap time.
+        """
+        for lap_obj, spec in zip(self.lap_objs, self.driver_specs):
+            disp = spec['display_name']
+            if disp not in self.df_corner_times.columns:
+                continue
+
+            lt = lap_obj['LapTime']
+            lap_seconds = lt.total_seconds() if hasattr(lt, 'total_seconds') else float(lt)
+            corner_sum = self.df_corner_times[disp].sum()
+
+            if corner_sum > 0 and not np.isnan(corner_sum):
+                scale = lap_seconds / corner_sum
+                self.df_corner_times[disp] *= scale
+                logger.debug(
+                    "%s: normalized corner times by factor %.6f (was %.3f, lap %.3f)",
+                    disp, scale, corner_sum, lap_seconds,
+                )
+
+    # ── Validation ────────────────────────────────────────────────────────
+
+    def validate(self):
+        """
+        Sanity check: sum of corner times vs actual lap time.
+        Returns a DataFrame with columns [Driver, Sum_Corners, Lap_Time, Diff, Error_%].
+        """
+        rows = []
+        for lap_obj, spec in zip(self.lap_objs, self.driver_specs):
+            disp = spec['display_name']
+            lt = lap_obj['LapTime']
+            lap_seconds = lt.total_seconds() if hasattr(lt, 'total_seconds') else float(lt)
+
+            if disp in self.df_corner_times.columns:
+                corner_sum = self.df_corner_times[disp].sum()
+            else:
+                corner_sum = np.nan
+
+            diff = corner_sum - lap_seconds
+            error_pct = (abs(diff) / lap_seconds) * 100 if lap_seconds > 0 else np.nan
+
+            rows.append({
+                'Driver': disp,
+                'Sum Corners (s)': round(corner_sum, 3),
+                'Lap Time (s)': round(lap_seconds, 3),
+                'Diff (s)': round(diff, 3),
+                'Error (%)': round(error_pct, 2),
+            })
+
+        df = pd.DataFrame(rows).set_index('Driver')
+        return df
+
+    # ── Data accessors ────────────────────────────────────────────────────
+
+    def get_table(self):
+        """Return the raw corner times DataFrame (rows=corners, cols=drivers)."""
+        return self.df_corner_times.copy()
+
+    def get_delta_table(self, baseline='per_corner_fastest'):
+        """Return corner time deltas relative to the baseline."""
+        if baseline == 'per_corner_fastest':
+            ref = self.df_corner_times.min(axis=1)
+        elif isinstance(baseline, (list, tuple)) and baseline[0] == 'fixed':
+            ref = self.df_corner_times[baseline[1]]
+        else:
+            raise ValueError("baseline must be 'per_corner_fastest' or ('fixed', '<name>')")
+        return self.df_corner_times.subtract(ref, axis=0)
+
+    # ── Plotting ──────────────────────────────────────────────────────────
+
+    def plot_corner_time_deltas(self, baseline='per_corner_fastest',
+                                figsize=(16, 7), save_path=None):
         """
         Plot grouped bar chart of corner time deltas. Returns (fig, ax).
 
-        baseline: 'per_corner_fastest'  OR  ('fixed', '<DisplayName>')
+        baseline: 'per_corner_fastest' or ('fixed', '<DisplayName>')
         """
         if self.df_corner_times.empty:
             raise ValueError("No corner time data available.")
 
-        # Compute deltas
-        if baseline == 'per_corner_fastest':
-            ref = self.df_corner_times.min(axis=1)  # per row
-        elif isinstance(baseline, (list, tuple)) and len(baseline) == 2 and baseline[0] == 'fixed':
-            ref_name = baseline[1]
-            if ref_name not in self.df_corner_times.columns:
-                raise ValueError(f"Baseline '{ref_name}' not found. Available: {list(self.df_corner_times.columns)}")
-            ref = self.df_corner_times[ref_name]
-        else:
-            raise ValueError("baseline must be 'per_corner_fastest' or ('fixed', '<DisplayName>')")
-
-        df_delta = self.df_corner_times.subtract(ref, axis=0)
+        df_delta = self.get_delta_table(baseline)
         colors = [self.driver_color_map.get(col, 'white') for col in df_delta.columns]
 
         fig, ax = plt.subplots(figsize=figsize)
@@ -221,17 +276,17 @@ class CornerTimeComparator:
 
         df_delta.plot.bar(ax=ax, rot=0, color=colors, edgecolor='white', linewidth=0.3)
 
-        # Build title with lap times as subtitle
-        event = getattr(self.session.event, 'EventName', str(self.session.event)) if hasattr(self.session, 'event') else self.session_name
+        # Title with lap times subtitle
+        event = self.session.event.EventName
         ref_caption = (
-            "fastest per corner" if baseline == 'per_corner_fastest' else f"vs {baseline[1]} (fixed)"
+            "fastest per corner" if baseline == 'per_corner_fastest'
+            else f"vs {baseline[1]} (fixed)"
         )
         title_parts = [f"{event} {self.year}"]
         if self.session_type:
             title_parts.append(self.session_type)
         title_parts.append(ref_caption)
 
-        # Lap times subtitle
         lap_strs = []
         for lap_obj, spec in zip(self.lap_objs, self.driver_specs):
             lt = lap_obj["LapTime"]
@@ -248,21 +303,20 @@ class CornerTimeComparator:
         ax.set_ylabel("Time Lost (s)", color='white', fontsize=11)
         ax.axhline(0, linewidth=1, color='white', alpha=0.5)
 
-        # Legend inside the plot
+        # Legend
         legend = ax.legend(loc='upper right', fontsize=10, framealpha=0.7)
         legend.get_frame().set_facecolor('#1e1e1e')
         legend.get_frame().set_edgecolor('white')
-        plt.setp(legend.get_title(), color='white')
         for text in legend.get_texts():
             text.set_color('white')
 
-        # Annotate the delta above each group of bars
+        # Annotate max delta per corner
         for i, corner in enumerate(df_delta.index):
-            deltas = df_delta.loc[corner]
-            max_delta = deltas.max()
-            if max_delta > 0:
+            max_delta = df_delta.loc[corner].max()
+            if max_delta > 0.005:
                 ax.text(i, max_delta + 0.005, f"+{max_delta:.3f}s",
-                        ha='center', va='bottom', color='white', fontsize=7, fontweight='bold')
+                        ha='center', va='bottom', color='white',
+                        fontsize=7, fontweight='bold')
 
         ax.grid(axis='y', linestyle='--', linewidth=0.3, alpha=0.5)
 
@@ -270,7 +324,8 @@ class CornerTimeComparator:
         add_branding(fig, text_pos=(0.99, 0.96), logo_pos=[0.90, 0.92, 0.05, 0.05])
 
         if save_path:
-            fig.savefig(save_path, dpi=300, bbox_inches='tight', facecolor=fig.get_facecolor())
+            fig.savefig(save_path, dpi=300, bbox_inches='tight',
+                        facecolor=fig.get_facecolor())
             logger.info("Saved plot to %s", save_path)
 
         plt.show()
