@@ -45,6 +45,7 @@ _SUBMODULES: List[str] = [
     "race_pace_boxplot",
     "cross_session_telemetry",
     "session_delta_chart",
+    "minisector",
 
 ]
 
