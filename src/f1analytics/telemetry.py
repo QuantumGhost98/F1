@@ -137,6 +137,7 @@ class Telemetry:
         # Load data — per-spec session for cross-session support
         loaded_laps = []
         lap_objs = []
+        per_spec_weather = []  # (avg_air, avg_track) per spec
         first_session = None
         for spec in driver_specs:
             sess = spec.get('session') or self.session
@@ -161,18 +162,19 @@ class Telemetry:
             loaded_laps.append(fl)
             lap_objs.append(lap)
 
+            # Collect per-spec weather from session
+            w = self.weather
+            if w is None and sess is not None and hasattr(sess, 'weather_data'):
+                w = sess.weather_data
+            if w is not None:
+                per_spec_weather.append((w['AirTemp'].mean(), w['TrackTemp'].mean()))
+            else:
+                per_spec_weather.append((None, None))
+
         # Use circuit_info from self or first session
         circuit_info = self.circuit_info
         if circuit_info is None and first_session:
             circuit_info = first_session.get_circuit_info() if hasattr(first_session, 'get_circuit_info') else None
-
-        # Weather — use self.weather or try first session
-        weather = self.weather
-        if weather is None and first_session and hasattr(first_session, 'weather_data'):
-            weather = first_session.weather_data
-
-        avg_air_temp = weather['AirTemp'].mean() if weather is not None else None
-        avg_track_temp = weather['TrackTemp'].mean() if weather is not None else None
 
         lap_times = [lap['LapTime'].total_seconds() for lap in lap_objs]
         baseline_idx = lap_times.index(min(lap_times))
@@ -256,7 +258,7 @@ class Telemetry:
             ax_dt.xaxis.set_minor_locator(plt.MultipleLocator(100))
             ax_dt.legend(loc='upper right', title=f"Benchmark: {baseline_name}")
 
-        # Annotations
+        # Annotations — each lap shows its own session's weather
         labels = []
         for i, (name, secs) in enumerate(zip(display_names, lap_times)):
             if pd.isna(secs):
@@ -265,16 +267,17 @@ class Telemetry:
                 mins = int(secs // 60)
                 rem = secs - mins * 60
                 label = f"{name}: {mins}:{rem:06.3f}"
-                if i == baseline_idx:
-                    label += f"   AIR: {avg_air_temp:.1f}°C  TRACK: {avg_track_temp:.1f}°C"
+                air_t, track_t = per_spec_weather[i]
+                if air_t is not None and track_t is not None:
+                    label += f"   AIR: {air_t:.1f}°C  TRACK: {track_t:.1f}°C"
             labels.append(label)
 
         fig.text(0.02, 0.98, "\n".join(labels), ha='left', va='top',
                 color='white', fontsize=10,
                 bbox=dict(facecolor='black', alpha=0.5, pad=4))
 
-        title = (f"{self.session.event['EventName']} {self.session.event.year} {session_label}"
-                if session_label else f"{self.session.event['EventName']} {self.session.event.year}")
+        title = (f"{self.session_name} {self.year} {session_label}"
+                if session_label else f"{self.session_name} {self.year}")
         fig.suptitle(title, color='white', fontsize=14)
         fig.subplots_adjust(top=0.92)
         plt.tight_layout(rect=[0, 0, 0.95, 0.94])
