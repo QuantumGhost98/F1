@@ -164,8 +164,11 @@ class Telemetry:
 
             # Collect per-spec weather from session
             w = self.weather
-            if w is None and sess is not None and hasattr(sess, 'weather_data'):
-                w = sess.weather_data
+            if w is None and sess is not None:
+                try:
+                    w = sess.weather_data
+                except Exception:
+                    w = None
             if w is not None:
                 per_spec_weather.append((w['AirTemp'].mean(), w['TrackTemp'].mean()))
             else:
