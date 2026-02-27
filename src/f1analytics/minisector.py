@@ -494,7 +494,6 @@ class MinisectorComparator:
                         facecolor=fig.get_facecolor())
             logger.info("Saved track map to %s", save_path)
 
-        plt.show()
         return fig, ax
 
     # ── Bar chart visualization ───────────────────────────────────────────
@@ -582,7 +581,6 @@ class MinisectorComparator:
                         facecolor=fig.get_facecolor())
             logger.info("Saved bar chart to %s", save_path)
 
-        plt.show()
         return fig, ax
 
     # ── Data accessors ────────────────────────────────────────────────────

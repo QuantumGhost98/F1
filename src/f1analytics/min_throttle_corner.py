@@ -7,7 +7,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from f1analytics.interpolate_df import interpolate_dataframe
-from f1analytics.colors_pilots import colors_pilots
+from f1analytics.palette import driver_colors as colors_pilots
 from f1analytics.config import logger
 from f1analytics.corner_utils import corner_identifier_to_index, corner_label
 from f1analytics.plot_utils import add_branding, setup_dark_theme

@@ -4,7 +4,7 @@ Fastest-sector delta plotter.
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from f1analytics.colors_pilots import colors_pilots
+from f1analytics.palette import driver_colors
 from f1analytics.config import logger
 from f1analytics.plot_utils import add_branding, setup_dark_theme
 
@@ -14,13 +14,13 @@ class SectorDeltaPlotter:
     Calculates and plots fastest sector times & deltas for each driver.
     """
 
-    def __init__(self, session, session_name, year, session_type):
+    def __init__(self, session_name, year, session_type, *, session=None):
         self.session = session
         self.session_name = session_name
         self.year = year
         self.session_type = session_type
         self.laps = session.laps
-        self.colors_pilots = colors_pilots
+        self.driver_colors = driver_colors
         self._df = None
 
     def _compute_table(self):
@@ -99,7 +99,7 @@ class SectorDeltaPlotter:
             drivers = df_['Driver']
             times = df_[time_col]
             deltas = df_[delta_col]
-            cols = [self.colors_pilots.get(d, 'grey') for d in drivers]
+            cols = [self.driver_colors.get(d, '#888888') for d in drivers]
 
             bars = ax.barh(drivers, deltas, color=cols)
             for bar, dval, tval in zip(bars, deltas, times):

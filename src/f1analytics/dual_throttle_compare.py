@@ -315,5 +315,4 @@ class DualThrottleComparisonVisualizer:
                         facecolor=fig.get_facecolor())
             logger.info("Saved plot to %s", save_path)
 
-        plt.show()
         return fig, ax

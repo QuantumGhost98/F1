@@ -13,7 +13,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from f1analytics.config import LOGO_PATH, ATTRIBUTION, logger
-from f1analytics.colors_pilots import colors_pilots
+from f1analytics.palette import driver_colors as colors_pilots  # compat alias
 
 
 # ── Default fallback shades when same base color is used for multiple drivers ──

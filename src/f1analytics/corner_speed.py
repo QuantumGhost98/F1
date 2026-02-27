@@ -3,7 +3,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import os
 from f1analytics.interpolate_df import interpolate_dataframe
-from f1analytics.colors_pilots import colors_pilots
+from f1analytics.palette import driver_colors as colors_pilots
 from f1analytics.config import logger
 from f1analytics.driver_utils import normalize_driver_specs
 from f1analytics.corner_utils import corner_label
@@ -140,5 +140,4 @@ class CornerSpeedComparator:
             fig.savefig(save_path, dpi=300, bbox_inches='tight', facecolor=fig.get_facecolor())
             logger.info("Saved plot to %s", save_path)
 
-        plt.show()
         return fig, ax

@@ -9,7 +9,7 @@ from f1analytics.acceleration import compute_acceleration
 from f1analytics.timedelta_to_seconds import timedelta_to_seconds
 import warnings
 from scipy.signal import savgol_filter
-from f1analytics.colors_pilots import colors_pilots
+from f1analytics.palette import driver_colors as colors_pilots
 from f1analytics.config import logger
 from f1analytics.driver_utils import normalize_driver_specs
 from f1analytics.plot_utils import (
@@ -303,5 +303,4 @@ class Telemetry:
             fig.savefig(save_path, dpi=300, bbox_inches='tight', facecolor=fig.get_facecolor())
             logger.info("Saved plot to %s", save_path)
 
-        plt.show()
         return fig, axes

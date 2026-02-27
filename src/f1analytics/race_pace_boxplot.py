@@ -4,7 +4,7 @@ Race-pace boxplot visualizer.
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from f1analytics.colors_pilots import colors_pilots
+from f1analytics.palette import driver_colors
 from f1analytics.config import logger
 from f1analytics.plot_utils import setup_dark_theme, add_branding
 
@@ -14,10 +14,13 @@ class RacePaceBoxplot:
     Generate boxplots of race-pace laps per driver, with driver-specific colors.
     """
 
-    def __init__(self, session, session_name, year, session_type, drivers=None):
+    def __init__(self, session_name, year, session_type, *, session=None, drivers=None):
         """
         Parameters
         ----------
+        session_name : str, e.g. "Italian Grand Prix"
+        year : int, e.g. 2025
+        session_type : str, e.g. "Q", "R"
         session : FastF1 loaded session
         drivers : None (all), or list of driver codes to include
         """
@@ -52,7 +55,7 @@ class RacePaceBoxplot:
         bp = ax.boxplot(data, patch_artist=True, labels=sorted_drivers)
 
         for i, d in enumerate(sorted_drivers):
-            color = colors_pilots.get(d, 'white')
+            color = driver_colors.get(d, 'white')
             bp['boxes'][i].set_facecolor(color)
             bp['boxes'][i].set_edgecolor('white')
             bp['medians'][i].set_color('white')
@@ -73,7 +76,6 @@ class RacePaceBoxplot:
             fig.savefig(save_path, dpi=300, bbox_inches='tight', facecolor=fig.get_facecolor())
             logger.info("Saved plot to %s", save_path)
 
-        plt.show()
         return fig, ax
 
     def get_table(self, save_path=None):
