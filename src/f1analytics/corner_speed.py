@@ -17,7 +17,7 @@ class CornerSpeedComparator:
     Compare peak (minimum or maximum) corner speeds across 1-3 drivers/laps.
     """
 
-    def __init__(self, session_name, year, session_type,
+    def __init__(self, session_name, year, session_type, *,
                  session=None, drivers=None, laps=None, mode='min'):
         """
         Parameters

@@ -21,7 +21,7 @@ from f1analytics.corner_utils import corner_label as _corner_label_util
 
 
 class Telemetry:
-    def __init__(self, session_name: str, year: int, session_type: str, session=None):
+    def __init__(self, session_name: str, year: int, session_type: str, *, session=None):
         """
         session_name: e.g. "Hungary Grand Prix"
         year: e.g. 2025

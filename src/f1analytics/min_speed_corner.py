@@ -142,7 +142,7 @@ class CornerMetricComparator:
         CornerMetricComparator(session, ..., drivers={'LEC': 'fastest', 'VER': 14}, metric='Speed', mode='min')
     """
 
-    def __init__(self, session_name, year, session_type,
+    def __init__(self, session_name, year, session_type, *,
                  session=None, drivers=None, laps=None,
                  metric='Speed', mode='min', margin=50):
         self.session_name = session_name

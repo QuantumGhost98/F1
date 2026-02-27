@@ -70,7 +70,7 @@ class CornerTimeComparator:
         )
     """
 
-    def __init__(self, session_name: str, year: int, session_type: str,
+    def __init__(self, session_name: str, year: int, session_type: str, *,
                  session=None, drivers=None, laps=None, n_interp=200):
         self.driver_specs = normalize_driver_specs(drivers=drivers, laps=laps, max_specs=4)
         self.display_names = [s['display_name'] for s in self.driver_specs]

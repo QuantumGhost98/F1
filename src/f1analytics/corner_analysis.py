@@ -26,7 +26,7 @@ class CornerAnalysis:
     corner_idxs now also supports ranges like "3-5" and nested lists/tuples like [3,4] or (7, 9) which are expanded inclusively.
     """
 
-    def __init__(self, session_name: str, year: int, session_type: str,
+    def __init__(self, session_name: str, year: int, session_type: str, *,
                  session=None, drivers=None, laps=None,
                  corner_idxs=None, before=50, after=50):
         self.session_name = session_name

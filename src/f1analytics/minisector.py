@@ -52,7 +52,7 @@ class MinisectorComparator:
         )
     """
 
-    def __init__(self, session_name, year, session_type,
+    def __init__(self, session_name, year, session_type, *,
                  session=None, drivers=None, laps=None, n_sectors=25):
         self.session_name = session_name
         self.year = year
