@@ -17,18 +17,50 @@ from f1analytics.palette import driver_colors as colors_pilots  # compat alias
 
 
 # ── Default fallback shades when same base color is used for multiple drivers ──
+# Keys match hex values in palette.py so cross-session comparisons (same driver
+# appearing twice) get visually distinct colors.
 
 DEFAULT_FALLBACK_SHADES = {
-    'red': ['white', 'lightcoral'],
+    # Red Bull
+    '#3671C6': ['#A3C4F3', '#D6E6FF'],
+    '#6CA0E8': ['#A3C4F3'],
+    # Ferrari
+    '#E80020': ['#FFB347', '#FFDDA6'],   # orange/gold — clearly distinct from red
+    '#FF6F61': ['#FFB347'],
+    # Mercedes
+    '#27F4D2': ['#B8FFE8', '#E0FFF5'],
+    '#86F9E8': ['#E0FFF5'],
+    # McLaren
+    '#FF8700': ['#FFD966', '#FFF2CC'],
+    '#FFB347': ['#FFD966'],
+    # Aston Martin
+    '#229971': ['#80DEAC', '#C8F7DC'],
+    '#5CBFA0': ['#C8F7DC'],
+    # Alpine
+    '#FF87BC': ['#E0AAFF', '#FFD6EB'],
+    '#FFB8D9': ['#FFD6EB'],
+    # Williams
+    '#64C4FF': ['#C8E6FF', '#E8F4FF'],
+    '#A3DDFF': ['#E8F4FF'],
+    # Racing Bulls
+    '#6692FF': ['#B3CCFF', '#D9E6FF'],
+    '#99B8FF': ['#D9E6FF'],
+    # Haas
+    '#B6BABD': ['#FFFFFF', '#E8E8E8'],
+    '#D9DCDE': ['#FFFFFF'],
+    # Audi
+    '#00E701': ['#99FF99', '#CCFFCC'],
+    '#66F34D': ['#CCFFCC'],
+    # Cadillac
+    '#C0C0C0': ['#FFFFFF', '#F0F0F0'],
+    '#E0E0E0': ['#FFFFFF'],
+    # Legacy names (backward compat)
+    'red': ['#FFB347', 'lightcoral'],
     'blue': ['cyan', 'lightblue'],
     'orange': ['gold', 'wheat'],
     'grey': ['white', 'silver'],
     'green': ['lime', 'springgreen'],
     'pink': ['violet', 'lightpink'],
-    'olive': ['khaki'],
-    'navy': ['skyblue'],
-    '#9932CC': ['plum'],
-    'lime': ['yellowgreen'],
 }
 
 
