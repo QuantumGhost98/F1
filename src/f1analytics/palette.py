@@ -31,47 +31,47 @@ team_colors = {
 driver_colors = {
     # Red Bull Racing
     "VER": "#3671C6",
-    "HAD": "#6CA0E8",
+    "HAD": "#3671C6",
 
     # Ferrari
     "LEC": "#E80020",
-    "HAM": "#FF6F61",
+    "HAM": "#E80020",
 
     # Mercedes
     "RUS": "#27F4D2",
-    "ANT": "#86F9E8",
+    "ANT": "#27F4D2",
 
     # McLaren
     "NOR": "#FF8700",
-    "PIA": "#FFB347",
+    "PIA": "#FF8700",
 
     # Aston Martin
     "ALO": "#229971",
-    "STR": "#5CBFA0",
+    "STR": "#229971",
 
     # Alpine
     "GAS": "#FF87BC",
-    "COL": "#FFB8D9",
+    "COL": "#FF87BC",
 
     # Williams
     "SAI": "#64C4FF",
-    "ALB": "#A3DDFF",
+    "ALB": "#64C4FF",
 
     # Racing Bulls
     "LAW": "#6692FF",
-    "LIN": "#99B8FF",
+    "LIN": "#6692FF",
 
     # Haas
     "OCO": "#B6BABD",
-    "BEA": "#D9DCDE",
+    "BEA": "#B6BABD",
 
     # Audi
     "HUL": "#00E701",
-    "BOR": "#66F34D",
+    "BOR": "#00E701",
 
     # Cadillac
     "PER": "#C0C0C0",
-    "BOT": "#E0E0E0",
+    "BOT": "#C0C0C0",
 }
 
 
