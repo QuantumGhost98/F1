@@ -42,6 +42,7 @@ from f1analytics.dual_throttle_compare import DualThrottleComparisonVisualizer
 from f1analytics.race_pace_boxplot import RacePaceBoxplot
 from f1analytics.fastest_sectors_deltas import SectorDeltaPlotter
 from f1analytics.min_speed_corner import CornerMetricComparator, CornerMinSpeed
+from f1analytics.min_throttle_corner import CornerMinThrottle
 from f1analytics.model_prediction_race_pace import RacePaceAnalyzer
 
 # ── Standalone functions ──────────────────────────────────────────────────────
@@ -70,6 +71,7 @@ __all__ = [
     "SectorDeltaPlotter",
     "CornerMetricComparator",
     "CornerMinSpeed",
+    "CornerMinThrottle",
     "RacePaceAnalyzer",
     # Functions
     "compute_acceleration",
