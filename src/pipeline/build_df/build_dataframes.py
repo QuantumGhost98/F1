@@ -21,6 +21,8 @@ from pathlib import Path
 from datetime import datetime, timedelta
 import sys
 
+from pipeline.log import logger
+
 
 def parse_ts(utc_str):
     """Parse F1 timestamp handling any fractional second precision."""
@@ -32,9 +34,12 @@ def parse_ts(utc_str):
     return datetime.fromisoformat(s + '+00:00')
 
 
-def load_json(path):
-    """Load a JSON file."""
-    with open(path) as f:
+def load_json(path, default=None):
+    """Load a JSON file, returning *default* if the file doesn't exist."""
+    p = Path(path)
+    if not p.exists():
+        return default if default is not None else []
+    with open(p) as f:
         return json.load(f)
 
 
@@ -55,8 +60,10 @@ def build_driver_map(driver_list_data):
 
 def build_laps_df(decoded_dir, drivers):
     """Build the main laps DataFrame."""
-    timing_data = load_json(Path(decoded_dir) / 'TimingData.json')
-    app_data = load_json(Path(decoded_dir) / 'TimingAppData.json')
+    timing_data = load_json(Path(decoded_dir) / 'TimingData.json', default=[])
+    if not timing_data:
+        return pd.DataFrame()
+    app_data = load_json(Path(decoded_dir) / 'TimingAppData.json', default=[])
     
     # Get keyframe (first entry has full state)
     kf = timing_data[0]['data']
@@ -173,7 +180,9 @@ def build_laps_df(decoded_dir, drivers):
 
 def build_telemetry_df(decoded_dir, drivers):
     """Build the telemetry DataFrame with all car data."""
-    car_data = load_json(Path(decoded_dir) / 'CarData.json')
+    car_data = load_json(Path(decoded_dir) / 'CarData.json', default=[])
+    if not car_data:
+        return pd.DataFrame()
     
     records = []
     
@@ -212,7 +221,9 @@ def build_telemetry_df(decoded_dir, drivers):
 
 def build_position_df(decoded_dir, drivers):
     """Build the position DataFrame."""
-    pos_data = load_json(Path(decoded_dir) / 'Position.json')
+    pos_data = load_json(Path(decoded_dir) / 'Position.json', default=[])
+    if not pos_data:
+        return pd.DataFrame()
     
     records = []
     
@@ -251,63 +262,66 @@ def add_distance_to_telemetry(telemetry_df):
     # Group by driver
     def compute_distance(group):
         group = group.sort_values('Date').copy()
-        
+
         # Speed in m/s
         speeds_ms = group['Speed'].values / 3.6
-        
-        # Time deltas
-        dates = group['Date'].values
-        dt = np.zeros(len(group))
-        for i in range(1, len(group)):
-            dt[i] = (pd.Timestamp(dates[i]) - pd.Timestamp(dates[i-1])).total_seconds()
-        
+
+        # Vectorized time deltas (much faster than Python loop)
+        dt_ns = np.diff(group['Date'].values).astype('timedelta64[ns]').astype(np.float64) / 1e9
+        dt = np.concatenate([[0.0], dt_ns])
+
         # Cumulative distance
-        distance = np.cumsum(speeds_ms * dt)
-        group['Distance'] = distance
-        
+        group['Distance'] = np.cumsum(speeds_ms * dt)
         return group
-    
-    telemetry_df = telemetry_df.groupby('DriverNumber', group_keys=False).apply(compute_distance)
-    
+
+    telemetry_df = telemetry_df.groupby('DriverNumber', group_keys=False).apply(
+        compute_distance, include_groups=False
+    )
+    # Re-add DriverNumber (excluded by include_groups=False)
+    telemetry_df = telemetry_df.reset_index(level=0)
+
     return telemetry_df
 
 
 def main():
-    if len(sys.argv) < 2:
-        print(__doc__)
-        print("Error: Please provide decoded directory path.")
-        sys.exit(1)
-    
-    decoded_dir = Path(sys.argv[1])
-    
+    import argparse
+    parser = argparse.ArgumentParser(
+        description='Build F1 DataFrames from decoded live data',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=__doc__
+    )
+    parser.add_argument('decoded_dir', type=Path,
+                        help='Path to decoded/ directory')
+    args = parser.parse_args()
+
+    decoded_dir = args.decoded_dir
     if not decoded_dir.exists():
         print(f"Error: Directory not found: {decoded_dir}")
         sys.exit(1)
     
-    print(f"Loading data from: {decoded_dir}")
-    print()
+    logger.info("Loading data from: %s", decoded_dir)
     
     # Load driver info
     driver_list = load_json(decoded_dir / 'DriverList.json')
     drivers = build_driver_map(driver_list)
-    print(f"✓ Loaded {len(drivers)} drivers")
+    logger.info("✓ Loaded %d drivers", len(drivers))
     
     # Build DataFrames
-    print("\nBuilding DataFrames...")
+    logger.info("Building DataFrames...")
     
     laps = build_laps_df(decoded_dir, drivers)
-    print(f"✓ Laps:      {len(laps)} rows, {len(laps['Driver'].unique())} drivers")
+    logger.info("✓ Laps:      %d rows, %d drivers", len(laps), len(laps['Driver'].unique()) if len(laps) > 0 else 0)
     
     telemetry = build_telemetry_df(decoded_dir, drivers)
-    print(f"✓ Telemetry: {len(telemetry)} rows, {len(telemetry['Driver'].unique())} drivers")
+    logger.info("✓ Telemetry: %d rows, %d drivers", len(telemetry), len(telemetry['Driver'].unique()) if len(telemetry) > 0 else 0)
     
     positions = build_position_df(decoded_dir, drivers)
-    print(f"✓ Positions: {len(positions)} rows, {len(positions['Driver'].unique())} drivers")
+    logger.info("✓ Positions: %d rows, %d drivers", len(positions), len(positions['Driver'].unique()) if len(positions) > 0 else 0)
     
     # Add distance
-    print("\nComputing distance...")
+    logger.info("Computing distance...")
     telemetry = add_distance_to_telemetry(telemetry)
-    print(f"✓ Distance added to telemetry")
+    logger.info("✓ Distance added to telemetry")
     
     # Save to pickle
     output_dir = decoded_dir.parent / 'dataframes'
@@ -317,26 +331,18 @@ def main():
     telemetry.to_pickle(output_dir / 'telemetry.pkl')
     positions.to_pickle(output_dir / 'positions.pkl')
     
-    print(f"\n✓ Saved DataFrames to: {output_dir}")
-    print(f"  - laps.pkl")
-    print(f"  - telemetry.pkl")
-    print(f"  - positions.pkl")
+    logger.info("✓ Saved DataFrames to: %s", output_dir)
     
     # Show sample
-    print("\n" + "="*80)
-    print("LAPS SAMPLE (first 10 rows)")
-    print("="*80)
-    print(laps.head(10).to_string())
+    logger.info("LAPS SAMPLE (first 10 rows)")
+    logger.info("\n%s", laps.head(10).to_string())
     
     print("\n" + "="*80)
     print("TELEMETRY SAMPLE (LEC, first 10 rows)")
     print("="*80)
     lec_tel = telemetry[telemetry.Driver == 'LEC'].head(10)
-    print(lec_tel.to_string())
-    
-    print("\n" + "="*80)
-    print("Quick access example:")
-    print("="*80)
+    logger.info("TELEMETRY SAMPLE (LEC, first 10 rows)")
+    logger.info("\n%s", lec_tel.to_string())
     print("""
 import pandas as pd
 

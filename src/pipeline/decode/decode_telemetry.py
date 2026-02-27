@@ -29,6 +29,8 @@ import base64
 from pathlib import Path
 from collections import defaultdict
 
+from pipeline.log import logger
+
 
 def decode_z_data(encoded_str: str) -> dict | list | str:
     """
@@ -112,7 +114,7 @@ def process_entry(entry: list) -> tuple[str, dict]:
     return topic, result
 
 
-def process_file(input_path: str, output_dir: str = None):
+def process_file(input_path: str, output_dir: str = None, write_combined: bool = False):
     """
     Process the capture file, decoding all compressed entries
     and splitting into one file per unique topic.
@@ -126,9 +128,8 @@ def process_file(input_path: str, output_dir: str = None):
     
     out_dir.mkdir(parents=True, exist_ok=True)
     
-    print(f"Input:      {input_file}")
-    print(f"Output dir: {out_dir}")
-    print()
+    logger.info("Input:      %s", input_file)
+    logger.info("Output dir: %s", out_dir)
     
     # Group entries by topic
     topics_data = defaultdict(list)
@@ -162,54 +163,57 @@ def process_file(input_path: str, output_dir: str = None):
             all_entries.append({'topic': clean_topic, **processed})
             
             if total_lines % 1000 == 0:
-                print(f"  Processed {total_lines} lines...")
+                logger.debug("Processed %d lines...", total_lines)
     
     # Write individual topic files
-    print(f"\nWriting {len(topics_data)} topic files...")
+    logger.info("Writing %d topic files...", len(topics_data))
     for topic, entries in sorted(topics_data.items()):
         topic_file = out_dir / f"{topic}.json"
         with open(topic_file, 'w') as f:
             json.dump(entries, f, indent=2, default=str)
-        print(f"  ✓ {topic}.json ({len(entries)} entries)")
+        logger.info("  ✓ %s.json (%d entries)", topic, len(entries))
     
-    # Write combined file
-    all_file = out_dir / '_all_decoded.json'
-    with open(all_file, 'w') as f:
-        json.dump(all_entries, f, indent=2, default=str)
-    print(f"  ✓ _all_decoded.json ({len(all_entries)} total entries)")
+    # Write combined file only if requested
+    if write_combined:
+        all_file = out_dir / '_all_decoded.json'
+        with open(all_file, 'w') as f:
+            json.dump(all_entries, f, indent=2, default=str)
+        logger.info("  ✓ _all_decoded.json (%d total entries)", len(all_entries))
     
     # Summary
-    print(f"\n{'='*50}")
-    print(f"  Total lines processed:    {total_lines}")
-    print(f"  Compressed decoded (ok):  {decoded_count}")
-    print(f"  Decode errors:            {error_count}")
-    print(f"  Unique topics:            {len(topics_data)}")
-    print(f"  Output directory:         {out_dir}")
-    print(f"{'='*50}")
+    logger.info("Total lines processed:    %d", total_lines)
+    logger.info("Compressed decoded (ok):  %d", decoded_count)
+    logger.info("Decode errors:            %d", error_count)
+    logger.info("Unique topics:            %d", len(topics_data))
+    logger.info("Output directory:         %s", out_dir)
     
-    # Topic breakdown
-    print(f"\n  Topic breakdown:")
     for topic in sorted(topics_data.keys()):
         count = len(topics_data[topic])
         was_compressed = topic in ('CarData', 'Position')
         tag = " (was .z compressed)" if was_compressed else ""
-        print(f"    {topic:.<30s} {count:>5} entries{tag}")
+        logger.info("  %s %5d entries%s", topic.ljust(30, '.'), count, tag)
 
 
 def main():
-    if len(sys.argv) < 2:
-        print(__doc__)
-        print("Error: Please provide an input file path.")
+    import argparse
+    parser = argparse.ArgumentParser(
+        description='Decode F1 live timing telemetry data',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=__doc__
+    )
+    parser.add_argument('input', type=str,
+                        help='Path to raw capture .txt file')
+    parser.add_argument('output', nargs='?', default=None,
+                        help='Output directory (default: decoded/ next to input)')
+    parser.add_argument('--combined', action='store_true',
+                        help='Also write _all_decoded.json (large, off by default)')
+    args = parser.parse_args()
+
+    if not Path(args.input).exists():
+        print(f"Error: File not found: {args.input}")
         sys.exit(1)
     
-    input_path = sys.argv[1]
-    output_dir = sys.argv[2] if len(sys.argv) > 2 else None
-    
-    if not Path(input_path).exists():
-        print(f"Error: File not found: {input_path}")
-        sys.exit(1)
-    
-    process_file(input_path, output_dir)
+    process_file(args.input, args.output, write_combined=args.combined)
 
 
 if __name__ == '__main__':

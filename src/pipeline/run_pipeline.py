@@ -27,13 +27,9 @@ import argparse
 from pathlib import Path
 from datetime import datetime
 
-# Add pipeline dirs to path
-PIPELINE_DIR = Path(__file__).parent
-sys.path.insert(0, str(PIPELINE_DIR / '02_decode'))
-sys.path.insert(0, str(PIPELINE_DIR / '03_build_df'))
-
-from decode_telemetry import process_file
-from build_dataframes import (
+from pipeline.log import logger
+from pipeline.decode.decode_telemetry import process_file
+from pipeline.build_df.build_dataframes import (
     load_json, build_driver_map, build_laps_df,
     build_telemetry_df, build_position_df, add_distance_to_telemetry
 )

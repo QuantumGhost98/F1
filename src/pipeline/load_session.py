@@ -8,8 +8,26 @@ DataFrames (laps.pkl, telemetry.pkl, positions.pkl).
 This allows using FastF1's analysis API (pick_fastest, get_telemetry,
 get_car_data, get_pos_data, etc.) on live-captured pipeline data.
 
+FastF1 Compatibility
+--------------------
+Tested with: FastF1 >=3.4, <=3.8
+This module accesses the following FastF1 private attributes:
+  - core.Session.__new__()      — bypass normal __init__
+  - session._laps               — Laps DataFrame
+  - session._car_data           — dict[driver_number] -> Telemetry
+  - session._pos_data           — dict[driver_number] -> Telemetry
+  - session._t0_date            — session start timestamp
+  - session._loaded             — set of loaded data categories
+  - session._weather_data       — weather DataFrame
+  - session._circuit_info       — CircuitInfo object
+  - session._results            — SessionResults
+  - session._session_info       — dict from SessionInfo.json
+  - session._session_status, _race_control_messages
+
+If FastF1 breaks after an upgrade, check these attributes first.
+
 Usage:
-    from load_session import load_session
+    from pipeline.load_session import load_session
 
     session = load_session("2026/day_2/dataframes")
 
@@ -86,13 +104,14 @@ def load_session(dataframes_dir, session_name="Testing", year=2026,
     raw_tele = pd.read_pickle(dataframes_dir / 'telemetry.pkl')
     raw_pos = pd.read_pickle(dataframes_dir / 'positions.pkl')
 
-    # ── Load session metadata from decoded directory ────────────────────
+    # ── Load session metadata from decoded directory (once) ─────────────
+    si_loaded = None
     circuit_key = 63  # Bahrain default
     if (decoded_dir / 'SessionInfo.json').exists():
         with open(decoded_dir / 'SessionInfo.json') as f:
-            session_info = json.load(f)
-        if session_info:
-            info = session_info[0].get('data', session_info[0])
+            si_loaded = json.load(f)
+        if si_loaded:
+            info = si_loaded[0].get('data', si_loaded[0])
             meeting = info.get('Meeting', {})
             event_name = meeting.get('OfficialName', event_name)
             circuit_key = meeting.get('Circuit', {}).get('Key', circuit_key)
@@ -119,11 +138,8 @@ def load_session(dataframes_dir, session_name="Testing", year=2026,
     session._session_status = None
     session._race_control_messages = None
     session._session_info = {}
-    if (decoded_dir / 'SessionInfo.json').exists():
-        with open(decoded_dir / 'SessionInfo.json') as f:
-            si_data = json.load(f)
-        if si_data:
-            session._session_info = si_data[0].get('data', si_data[0])
+    if si_loaded:
+        session._session_info = si_loaded[0].get('data', si_loaded[0])
     session._results = None
 
     # ── Load weather data ──────────────────────────────────────────────
@@ -149,18 +165,9 @@ def load_session(dataframes_dir, session_name="Testing", year=2026,
             'TrackTemp', 'WindDirection', 'WindSpeed'
         ])
 
-    # ── Load circuit info ──────────────────────────────────────────────
+    # ── Load circuit info (marker distances added after laps are built) ─
     try:
         _ci = get_circuit_info(year=year, circuit_key=circuit_key)
-        # Try to add marker distances; falls back to raw API data if position
-        # data is too sparse for the reference lap
-        try:
-            _ci.add_marker_distance(
-                reference_lap=core.Laps(laps_data, _force_default_cols=True
-                                        ).pick_fastest()
-            )
-        except Exception:
-            pass  # corners still have X/Y but no Distance — that's OK
         session._circuit_info = _ci
     except Exception:
         session._circuit_info = None
@@ -168,7 +175,7 @@ def load_session(dataframes_dir, session_name="Testing", year=2026,
     # Override get_circuit_info() to return the pre-loaded one
     import types
     session.get_circuit_info = types.MethodType(
-        lambda self: self._circuit_info, session
+        lambda self_: self_._circuit_info, session
     )
 
     # ── Determine t0_date (session start) ──────────────────────────────
@@ -242,6 +249,15 @@ def load_session(dataframes_dir, session_name="Testing", year=2026,
     laps_obj = core.Laps(laps_data, _force_default_cols=True)
     laps_obj.session = session
     session._laps = laps_obj
+
+    # ── Add marker distances to circuit info (now that laps exist) ─────
+    if session._circuit_info is not None:
+        try:
+            session._circuit_info.add_marker_distance(
+                reference_lap=laps_obj.pick_fastest()
+            )
+        except Exception:
+            pass  # corners still have X/Y but no Distance — that's OK
 
     # ── Build car_data (telemetry per driver) ──────────────────────────
     drivers = sorted(raw_tele['DriverNumber'].unique().astype(str))
